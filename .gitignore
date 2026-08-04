@@ -1,0 +1,32 @@
+# ---------- .NET ----------
+bin/
+obj/
+
+# ---------- Yerel belge deposu (fiş görselleri — Faz 3) ----------
+backend/MaliMusavir.Api/storage/
+*.user
+*.suo
+.vs/
+artifacts/
+*.swp
+appsettings.Development.local.json
+
+# ---------- Node / Next.js ----------
+node_modules/
+.next/
+out/
+next-env.d.ts.bak
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---------- Ortam dosyaları ----------
+.env
+.env.local
+.env.*.local
+
+# ---------- IDE / OS ----------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

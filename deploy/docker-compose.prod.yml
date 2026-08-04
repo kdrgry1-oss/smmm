@@ -1,0 +1,118 @@
+# ÜRETİM compose — sunucuda proje kökünden şu şekilde çalıştırılır:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: malimusavir
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d malimusavir"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # DB dışarıya AÇILMAZ — sadece iç ağ.
+
+  # GİB Portal Robotu (Faz 15) — entegratör KULLANMAYAN mükelleflerin gelen belgelerini ve
+  # e-Tebligatlarını GİB Dijital Vergi Dairesi portalından mükellefin kendi kimliğiyle çeker.
+  # DIŞARIYA AÇILMAZ: ports YOKTUR; yalnız api ile aynı iç ağda http://gib-robot:8080.
+  # Erişim paylaşılan sırla korunur (X-Robot-Token = ROBOT_TOKEN).
+  gib-robot:
+    build:
+      context: ../gib-robot
+    restart: unless-stopped
+    environment:
+      ROBOT_TOKEN: ${ROBOT_TOKEN}
+      SESSION_DIR: /data/sessions
+      # Ekran görüntüleri teşhis için /tmp'e yazılır (docker logs gib-robot ile dosya adı görünür).
+      SHOT_DIR: /tmp
+      # OTURUMU CANLI TUTMA (heartbeat): kayıtlı her GİB oturumu bu aralıkta sessizce
+      # yoklanır → oturum düşmez, kullanıcı sürekli doğrulama kodu girmek zorunda kalmaz.
+      # 0 yazılırsa kapanır. Oturum ömrü (kayan pencere) GIB_SESSION_TTL_HOURS ile ayarlanır.
+      GIB_KEEPALIVE_MINUTES: ${GIB_KEEPALIVE_MINUTES:-8}
+      GIB_SESSION_TTL_HOURS: ${GIB_SESSION_TTL_HOURS:-12}
+    volumes:
+      # Oturum önbelleği: başarılı girişten sonra çerezler burada saklanır → her çekimde
+      # yeniden şifreyle giriş yapılmaz, GİB'e giden giriş sayısı düşer.
+      - gib-sessions:/data/sessions
+
+  api:
+    build:
+      context: ../backend/MaliMusavir.Api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      gib-robot:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=malimusavir;Username=${DB_USER};Password=${DB_PASSWORD}"
+      Jwt__Key: ${JWT_KEY}
+      Security__SecretKey: ${AES_KEY}
+      SuperAdmin__Email: ${SUPERADMIN_EMAIL}
+      SuperAdmin__Password: ${SUPERADMIN_PASSWORD}
+      # PUBLIC_SCHEME: alan adı + TLS varsa https (varsayılan), IP/test modunda .env'de http yap
+      Cors__AllowedOrigins__0: "${PUBLIC_SCHEME:-https}://${DOMAIN}"
+      Ocr__Provider: ${OCR_PROVIDER:-Mock}
+      Ocr__Anthropic__ApiKey: ${ANTHROPIC_API_KEY:-}
+      Ocr__Anthropic__Model: ${ANTHROPIC_MODEL:-claude-haiku-4-5}
+      Ocr__Anthropic__FallbackModel: ${ANTHROPIC_FALLBACK_MODEL:-claude-sonnet-4-5}
+      Ocr__OpenAi__ApiKey: ${OPENAI_API_KEY:-}
+      Ocr__OpenAi__Model: ${OPENAI_MODEL:-gpt-4o-mini}
+      Ocr__Gemini__ApiKey: ${GEMINI_API_KEY:-}
+      # Google eski nesil modelleri yeni hesaplara kapatıyor → "latest" takma adları güvenli
+      Ocr__Gemini__Model: ${GEMINI_MODEL:-gemini-flash-latest}
+      Ocr__Gemini__FallbackModel: ${GEMINI_FALLBACK_MODEL:-gemini-pro-latest}
+      # Faz 16 (A2): fiş OCR kuyruğu paralelliği — aynı anda işlenen ReceiptOcr işi sayısı.
+      OCR_CONCURRENCY: ${OCR_CONCURRENCY:-4}
+      Payments__Provider: ${PAYMENTS_PROVIDER:-Mock}
+      Payments__Iyzico__ApiKey: ${IYZICO_API_KEY:-}
+      Payments__Iyzico__SecretKey: ${IYZICO_SECRET_KEY:-}
+      Storage__Root: /app/storage
+      # false → görseller sıkıştırılmadan orijinal haliyle saklanır ve OCR'a orijinal gider
+      ImageProcessing__Enabled: ${IMAGE_PROCESSING_ENABLED:-true}
+      # GİB Portal Robotu (entegratör kullanmayan mükellefler). Robot yalnız iç ağdadır;
+      # ROBOT_TOKEN api ve gib-robot servislerinde AYNI değerdir (paylaşılan sır).
+      GIB_ROBOT_URL: http://gib-robot:8080
+      ROBOT_TOKEN: ${ROBOT_TOKEN}
+    volumes:
+      - apistorage:/app/storage
+
+  web:
+    build:
+      context: ../web
+      args:
+        NEXT_PUBLIC_API_URL: "${PUBLIC_SCHEME:-https}://${DOMAIN}/api-proxy"
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      SITE_ADDRESS: "${PUBLIC_SCHEME:-https}://${DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata:
+  apistorage:
+  caddydata:
+  caddyconfig:
+  # GİB portal robotu oturum önbelleği (yalnız çerezler; şifre ASLA diske yazılmaz)
+  gib-sessions:

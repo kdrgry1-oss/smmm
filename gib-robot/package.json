@@ -1,0 +1,17 @@
+{
+  "name": "gib-robot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GİB Dijital Vergi Dairesi portal robotu — entegratör kullanmayan mükelleflerin gelen belgelerini ve e-Tebligatlarını mükellefin kendi kimliğiyle çeken iç servis.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "playwright": "1.47.2"
+  }
+}
