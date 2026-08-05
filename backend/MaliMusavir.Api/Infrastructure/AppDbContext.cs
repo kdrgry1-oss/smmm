@@ -93,6 +93,12 @@ public class AppDbContext : DbContext
     public DbSet<ClientFee> ClientFees => Set<ClientFee>();
     public DbSet<FeeInvoice> FeeInvoices => Set<FeeInvoice>();
 
+    // ---------- Banka hesap hareketleri (ekstre içe aktarma + kodlama) ----------
+    public DbSet<BankAccount> BankAccounts => Set<BankAccount>();
+    public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
+    public DbSet<BankStatementImport> BankStatementImports => Set<BankStatementImport>();
+    public DbSet<BankCounterpartyMap> BankCounterpartyMaps => Set<BankCounterpartyMap>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -738,6 +744,85 @@ public class AppDbContext : DbContext
         });
 
         // ---------- Faz 11 — E7: SMMM ücret / tahsilat takibi ----------
+
+        // ---------- Banka hesap hareketleri ----------
+
+        modelBuilder.Entity<BankAccount>(e =>
+        {
+            e.Property(a => a.BankName).HasMaxLength(150).IsRequired();
+            e.Property(a => a.Iban).HasMaxLength(34).IsRequired();
+            e.Property(a => a.AccountNumber).HasMaxLength(50);
+            e.Property(a => a.CurrencyCode).HasMaxLength(3).IsRequired();
+            e.Property(a => a.AccountCode).HasMaxLength(30);
+            e.Property(a => a.LastBalance).HasPrecision(18, 2);
+
+            // Aynı mükellefte aynı IBAN bir kez tanımlanır (ekstre tekrar yüklense de).
+            e.HasIndex(a => new { a.ClientId, a.Iban }).IsUnique();
+
+            e.HasOne(a => a.Client)
+                .WithMany()
+                .HasForeignKey(a => a.ClientId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasQueryFilter(a => _isSuperAdmin || a.TenantId == _tenantId);
+        });
+
+        modelBuilder.Entity<BankTransaction>(e =>
+        {
+            e.Property(t => t.Amount).HasPrecision(18, 2);
+            e.Property(t => t.BalanceAfter).HasPrecision(18, 2);
+            e.Property(t => t.CurrencyCode).HasMaxLength(3).IsRequired();
+            e.Property(t => t.CounterpartyName).HasMaxLength(300);
+            e.Property(t => t.CounterpartyIban).HasMaxLength(34);
+            e.Property(t => t.CounterpartyTaxId).HasMaxLength(11);
+            e.Property(t => t.Description).HasMaxLength(1000).IsRequired();
+            e.Property(t => t.ReferenceNo).HasMaxLength(100);
+            e.Property(t => t.TransactionType).HasMaxLength(50);
+            e.Property(t => t.SuggestedAccountCode).HasMaxLength(30);
+            e.Property(t => t.AccountCode).HasMaxLength(30);
+            e.Property(t => t.CariCode).HasMaxLength(30);
+            e.Property(t => t.DedupKey).HasMaxLength(64).IsRequired();
+
+            // MÜKERRER KORUMASI: aynı hesapta aynı hareket iki kez yazılmaz.
+            e.HasIndex(t => new { t.BankAccountId, t.DedupKey }).IsUnique();
+            e.HasIndex(t => new { t.ClientId, t.TransactionDate });
+            e.HasIndex(t => new { t.ClientId, t.CodingStatus });
+
+            e.HasOne(t => t.BankAccount)
+                .WithMany(a => a.Transactions)
+                .HasForeignKey(t => t.BankAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasQueryFilter(t => _isSuperAdmin || t.TenantId == _tenantId);
+        });
+
+        modelBuilder.Entity<BankStatementImport>(e =>
+        {
+            e.Property(i => i.FileName).HasMaxLength(300).IsRequired();
+            e.Property(i => i.Format).HasMaxLength(20).IsRequired();
+            e.Property(i => i.Warning).HasMaxLength(1000);
+
+            e.HasIndex(i => new { i.ClientId, i.CreatedAt });
+
+            e.HasQueryFilter(i => _isSuperAdmin || i.TenantId == _tenantId);
+        });
+
+        modelBuilder.Entity<BankCounterpartyMap>(e =>
+        {
+            e.Property(m => m.CounterpartyIban).HasMaxLength(34);
+            e.Property(m => m.CounterpartyTaxId).HasMaxLength(11);
+            e.Property(m => m.CounterpartyNameNormalized).HasMaxLength(300).IsRequired();
+            e.Property(m => m.CariCode).HasMaxLength(30);
+            e.Property(m => m.AccountCode).HasMaxLength(30);
+            e.Property(m => m.DisplayName).HasMaxLength(300);
+
+            // Eşleşme anahtarları — IBAN birincil, VKN ikincil, unvan üçüncül.
+            e.HasIndex(m => new { m.ClientId, m.CounterpartyIban });
+            e.HasIndex(m => new { m.ClientId, m.CounterpartyTaxId });
+            e.HasIndex(m => new { m.ClientId, m.CounterpartyNameNormalized });
+
+            e.HasQueryFilter(m => _isSuperAdmin || m.TenantId == _tenantId);
+        });
 
         modelBuilder.Entity<ClientFee>(e =>
         {

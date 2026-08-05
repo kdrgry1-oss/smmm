@@ -142,6 +142,100 @@ CREATE INDEX IF NOT EXISTS "IX_VendorCariMaps_Client_NameKey"
 Not: Eski kayıtlarda `VendorNameNormalized` boş kalır — motor bu kayıtları VKN üzerinden
 eşleştirmeye devam eder; onay/öğrenme akışı boş anahtarları zamanla geri doldurur.
 
+### Sürüm: Banka hesap hareketleri (ekstre içe aktarma + kodlama)
+
+> Dört YENİ tablo. `EnsureCreated` mevcut veritabanına tablo EKLEMEZ; bu betik bir kez
+> çalıştırılmalıdır. Betik `IF NOT EXISTS` kullandığından tekrar çalıştırmak zararsızdır.
+
+```sql
+CREATE TABLE IF NOT EXISTS "BankAccounts" (
+    "Id" uuid NOT NULL, "TenantId" uuid NOT NULL, "ClientId" uuid NOT NULL,
+    "BankName" character varying(150) NOT NULL, "Iban" character varying(34) NOT NULL,
+    "AccountNumber" character varying(50), "CurrencyCode" character varying(3) NOT NULL,
+    "AccountCode" character varying(30), "LastBalance" numeric(18,2),
+    "LastBalanceAt" timestamp with time zone, "IsArchived" boolean NOT NULL DEFAULT false,
+    "CreatedAt" timestamp with time zone NOT NULL,
+    CONSTRAINT "PK_BankAccounts" PRIMARY KEY ("Id"),
+    CONSTRAINT "FK_BankAccounts_Clients_ClientId" FOREIGN KEY ("ClientId")
+        REFERENCES "Clients" ("Id") ON DELETE CASCADE);
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_BankAccounts_ClientId_Iban" ON "BankAccounts" ("ClientId", "Iban");
+
+CREATE TABLE IF NOT EXISTS "BankTransactions" (
+    "Id" uuid NOT NULL, "TenantId" uuid NOT NULL, "ClientId" uuid NOT NULL,
+    "BankAccountId" uuid NOT NULL, "TransactionDate" timestamp with time zone NOT NULL,
+    "Direction" integer NOT NULL, "Amount" numeric(18,2) NOT NULL,
+    "CurrencyCode" character varying(3) NOT NULL, "BalanceAfter" numeric(18,2),
+    "CounterpartyName" character varying(300), "CounterpartyIban" character varying(34),
+    "CounterpartyTaxId" character varying(11), "Description" character varying(1000) NOT NULL,
+    "ReferenceNo" character varying(100), "TransactionType" character varying(50),
+    "SuggestedAccountCode" character varying(30), "AccountCode" character varying(30),
+    "CariCode" character varying(30), "Confidence" double precision,
+    "CodingStatus" integer NOT NULL DEFAULT 0, "Source" integer NOT NULL DEFAULT 0,
+    "ImportId" uuid, "DedupKey" character varying(64) NOT NULL,
+    "CreatedAt" timestamp with time zone NOT NULL,
+    CONSTRAINT "PK_BankTransactions" PRIMARY KEY ("Id"),
+    CONSTRAINT "FK_BankTransactions_BankAccounts_BankAccountId" FOREIGN KEY ("BankAccountId")
+        REFERENCES "BankAccounts" ("Id") ON DELETE CASCADE);
+-- MÜKERRER KORUMASI: aynı ekstre iki kez yüklense de hareket çiftlenmez.
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_BankTransactions_BankAccountId_DedupKey"
+    ON "BankTransactions" ("BankAccountId", "DedupKey");
+CREATE INDEX IF NOT EXISTS "IX_BankTransactions_ClientId_TransactionDate"
+    ON "BankTransactions" ("ClientId", "TransactionDate");
+CREATE INDEX IF NOT EXISTS "IX_BankTransactions_ClientId_CodingStatus"
+    ON "BankTransactions" ("ClientId", "CodingStatus");
+
+CREATE TABLE IF NOT EXISTS "BankStatementImports" (
+    "Id" uuid NOT NULL, "TenantId" uuid NOT NULL, "ClientId" uuid NOT NULL,
+    "BankAccountId" uuid, "FileName" character varying(300) NOT NULL,
+    "Format" character varying(20) NOT NULL, "ParsedCount" integer NOT NULL DEFAULT 0,
+    "ImportedCount" integer NOT NULL DEFAULT 0, "SkippedDuplicates" integer NOT NULL DEFAULT 0,
+    "PeriodFrom" timestamp with time zone, "PeriodTo" timestamp with time zone,
+    "Warning" character varying(1000), "CreatedAt" timestamp with time zone NOT NULL,
+    CONSTRAINT "PK_BankStatementImports" PRIMARY KEY ("Id"));
+CREATE INDEX IF NOT EXISTS "IX_BankStatementImports_ClientId_CreatedAt"
+    ON "BankStatementImports" ("ClientId", "CreatedAt");
+
+CREATE TABLE IF NOT EXISTS "BankCounterpartyMaps" (
+    "Id" uuid NOT NULL, "TenantId" uuid NOT NULL, "ClientId" uuid NOT NULL,
+    "CounterpartyIban" character varying(34), "CounterpartyTaxId" character varying(11),
+    "CounterpartyNameNormalized" character varying(300) NOT NULL DEFAULT '',
+    "CariCode" character varying(30), "AccountCode" character varying(30),
+    "DisplayName" character varying(300), "UseCount" integer NOT NULL DEFAULT 1,
+    "UpdatedAt" timestamp with time zone NOT NULL,
+    CONSTRAINT "PK_BankCounterpartyMaps" PRIMARY KEY ("Id"));
+CREATE INDEX IF NOT EXISTS "IX_BankCounterpartyMaps_ClientId_Iban"
+    ON "BankCounterpartyMaps" ("ClientId", "CounterpartyIban");
+CREATE INDEX IF NOT EXISTS "IX_BankCounterpartyMaps_ClientId_TaxId"
+    ON "BankCounterpartyMaps" ("ClientId", "CounterpartyTaxId");
+CREATE INDEX IF NOT EXISTS "IX_BankCounterpartyMaps_ClientId_NameKey"
+    ON "BankCounterpartyMaps" ("ClientId", "CounterpartyNameNormalized");
+```
+
+## Banka hesap hareketleri — kaynak stratejisi
+
+**Neden API değil, ekstre içe aktarma?** Türkiye'de bankaların serbestçe kullanılabilir açık
+API'si yoktur; kurumsal API'ler **banka başına ayrı sözleşme** gerektirir. Ekstre dosyası ise
+her bankanın internet şubesinden indirilebilir. Bu yüzden birincil yol dosyadır:
+
+| Biçim | Uzantı | Not |
+| --- | --- | --- |
+| MT940 (SWIFT) | `.sta` `.mt940` `.txt` | Kurumsal internet bankacılığının standart çıktısı — en zengin veri |
+| CSV | `.csv` | Ayraç (`;` `,` tab) otomatik sezilir |
+| Excel | `.xlsx` | Başlık satırından sütun sezgisi (Türkçe başlıklar tanınır) |
+
+Banka kurumsal API'si sözleşmeyle geldiğinde, aynı `ParsedBankLine` sözleşmesini üreten bir
+adaptör yazılır — mükerrer eleme, kodlama ve UI **değişmez**.
+
+**Mükerrer koruması:** Banka referansı (dekont no) varsa ondan, yoksa
+tarih+yön+tutar+açıklama+bakiye SHA-256 özetinden `DedupKey` üretilir ve
+`(BankAccountId, DedupKey)` benzersizdir. Aynı ekstre iki kez yüklenirse hareketler
+**çiftlenmez** — muhasebede çift kayıt riski yoktur.
+
+**Kodlama/öğrenme:** SMMM bir hareketi onayladığında karşı taraf → hesap/cari eşlemesi
+`BankCounterpartyMaps`'e yazılır; sonraki ekstrelerde aynı karşı taraf otomatik kodlanır
+(eşleşme sırası **IBAN → VKN/TCKN → normalize unvan**, güven skoru 0.95/0.85/0.70).
+Otomatik kodlanan hareket **Approved yapılmaz** — her zaman SMMM onayına düşer.
+
 ## GİB Portal Robotu (`gib-robot` servisi)
 
 **Ne yapar?** Entegratör kullanmayan mükelleflerin **gelen belgelerini** ("Adıma Düzenlenen

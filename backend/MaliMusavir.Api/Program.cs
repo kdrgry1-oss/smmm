@@ -94,6 +94,11 @@ builder.Services.AddScoped<EArsivInvoiceIssuer>();
 
 builder.Services.AddScoped<EInvoiceSyncService>();
 
+// ---------- Banka hesap hareketleri ----------
+// Birincil yol dosya içe aktarmadır (MT940/CSV/Excel) — her banka çalışır, sözleşme gerekmez.
+// Banka kurumsal API'si geldiğinde aynı ParsedBankLine sözleşmesini üreten adaptör eklenir.
+builder.Services.AddScoped<BankStatementService>();
+
 // ---------- Faz 2: Otomatik Hesap/Cari Kod Motoru ----------
 // Katman 3 (AI sınıflandırıcı) genişleme noktası: bu fazda Noop — kademe
 // hafıza → satıcı varsayılanı → kural → garantili doldurma ile her satırı yine de kodlar.
