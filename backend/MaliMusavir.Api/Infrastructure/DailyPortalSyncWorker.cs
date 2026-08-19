@@ -101,6 +101,11 @@ public class DailyPortalSyncWorker : BackgroundService
     private async Task EnqueueAllAsync(CancellationToken ct)
     {
         List<(Guid ClientId, Guid TenantId)> targets;
+        // Fatura çekimi AYRI hedef kümesi kullanır: e-Tebligat yalnız GİB'den gelir,
+        // ama gelen fatura entegratörün KENDİ kimliğiyle de çekilebilir. Bu yüzden
+        // entegratörlü (Nilvera/Uyumsoft/eLogo/EDM/Doğan/Paraşüt/e-Arşiv) mükellefler
+        // tebligat listesinde olmasa da fatura listesinde yer alır.
+        List<(Guid ClientId, Guid TenantId)> invoiceTargets;
 
         // Sistem taraması: kimliksiz scope'ta tenant filtresi her şeyi gizler → IgnoreQueryFilters.
         using (var scanScope = _scopeFactory.CreateScope())
@@ -146,13 +151,39 @@ public class DailyPortalSyncWorker : BackgroundService
                 .GroupBy(t => t.Item1)
                 .Select(g => g.First())
                 .ToList();
+
+            // Fatura hedefleri: entegrasyon kaydı OLAN tüm aktif mükellefler (Mock hariç).
+            // EInvoiceSyncService sağlayıcıyı mükellefin kendi kaydından seçer.
+            invoiceTargets = (await db.ClientIntegrations
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .Where(ci => ci.Provider != IntegrationProvider.Mock)
+                    .Join(
+                        db.Clients.IgnoreQueryFilters().AsNoTracking().Where(c => !c.IsArchived),
+                        ci => ci.ClientId,
+                        c => c.Id,
+                        (ci, c) => new { c.Id, c.TenantId })
+                    .ToListAsync(ct))
+                .Select(x => (x.Id, x.TenantId))
+                .GroupBy(t => t.Item1)
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        if (targets.Count == 0 && invoiceTargets.Count == 0)
+        {
+            _logger.LogInformation(
+                "Günlük senkron: ne GİB portal/müşavir kimliği olan mükellef ne de entegratör kaydı var.");
+            return;
         }
 
         if (targets.Count == 0)
         {
+            // Tebligat kaynağı yok ama fatura çekilebilir — tur fatura ile devam eder.
             _logger.LogInformation(
-                "GİB portal günlük senkronu: entegrasyonu GibPortal olan mükellef veya müşavir kimliği tanımlı tenant yok.");
-            return;
+                "Günlük senkron: e-Tebligat için GİB kimliği tanımlı mükellef yok. " +
+                "Entegratörlü mükelleflerin tebligatı için \"GİB Bağlantısı\" sayfasından " +
+                "müşavir girişi tanımlayın. Fatura çekimi etkilenmez.");
         }
 
         var to = DateTime.UtcNow.Date;
@@ -188,7 +219,40 @@ public class DailyPortalSyncWorker : BackgroundService
         }
 
         _logger.LogInformation(
-            "GİB portal günlük senkronu kuyruğa alındı. Mükellef: {Queued}/{Total}, aralık: {From:d} - {To:d}",
+            "e-Tebligat günlük senkronu kuyruğa alındı. Mükellef: {Queued}/{Total}, aralık: {From:d} - {To:d}",
             queued, targets.Count, from, to);
+
+        // ---------- Gelen fatura turu (tebligattan BAĞIMSIZ) ----------
+        // Ayrı iş tipi kullanılır: portal tebligat çağrısı takılsa bile faturalar akar,
+        // faturalar hata verse bile kanuni süreli tebligat gecikmez.
+        var invoiceQueued = 0;
+
+        foreach (var (clientId, tenantId) in invoiceTargets)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            using var invoiceScope = _scopeFactory.CreateScope();
+            invoiceScope.ServiceProvider.GetRequiredService<WorkerCurrentUser>().ActAsTenant(tenantId);
+
+            var invoiceJobService = invoiceScope.ServiceProvider.GetRequiredService<OutboundJobService>();
+            try
+            {
+                await invoiceJobService.EnqueueAsync(
+                    tenantId,
+                    OutboundJobService.TypeFaturaSync,
+                    new { clientId, from, to },
+                    ct);
+                invoiceQueued++;
+            }
+            catch (Exception ex)
+            {
+                // Tek mükellefin hatası diğerlerini durdurmaz.
+                _logger.LogError(ex, "Fatura senkron işi kuyruğa alınamadı. ClientId: {ClientId}", clientId);
+            }
+        }
+
+        _logger.LogInformation(
+            "Gelen fatura günlük senkronu kuyruğa alındı. Mükellef: {Queued}/{Total}, aralık: {From:d} - {To:d}",
+            invoiceQueued, invoiceTargets.Count, from, to);
     }
 }
