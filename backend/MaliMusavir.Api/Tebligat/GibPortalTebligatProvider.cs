@@ -110,8 +110,10 @@ public class GibPortalTebligatProvider : IETebligatProvider
                 if (integration is not null && integration.Provider != IntegrationProvider.GibPortal)
                 {
                     return ProviderResult<List<ProviderTebligat>>.Fail(
-                        $"{integration.Provider} için e-Tebligat sağlayıcı bağlantısı tanımlı değil. " +
-                        "Kayıtlı e-belge kimliği GİB girişi olarak kullanılmadı.");
+                        $"e-Tebligat yalnızca GİB Dijital Vergi Dairesi'nden çekilir; {integration.Provider} " +
+                        "gibi e-belge entegratörlerinin e-Tebligat servisi yoktur. Bu mükellefin tebligatı için " +
+                        "\"GİB Bağlantısı\" sayfasından müşavir girişi tanımlayın veya mükellefin kendi GİB " +
+                        "kimliğini kaydedin.");
                 }
 
                 return ProviderResult<List<ProviderTebligat>>.Fail(

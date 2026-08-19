@@ -56,10 +56,8 @@ bu saglayicinin e-Belge kimligiyle tebligat cekimi varsayimla etkinlestirilmez.
 - `BasicIntegration`: Gelen/giden e-Fatura, XML/PDF, durum, taslak, e-Arsiv
   ve e-Irsaliye-fatura baglantili islemler.
 - `VoucherIntegration`: e-SMM makbuz akislari.
-- `MüşavirPro` urun sayfasi e-Tebligat entegrasyonu sundugunu belirtir; ancak
-  kamuya acik `BasicIntegration` WSDL'inde e-Tebligat operasyonu yoktur.
-  Uyumsoft'un MüşavirPro'ya ozel servis sozlesmesi/endpoint'i teyit edilmeden
-  ayni kimlikle cagrilmaz.
+- Kamuya acik `BasicIntegration` WSDL'inde e-Tebligat operasyonu YOKTUR.
+  Bu saglayicinin e-belge kimligiyle tebligat cekimi yapilmaz.
 
 ## Sıradaki adaptörler
 
@@ -75,7 +73,6 @@ bu saglayicinin e-Belge kimligiyle tebligat cekimi varsayimla etkinlestirilmez.
 - GIB 509 sayili VUK Tebligi: https://cdn.gib.gov.tr/api/gibportal-file/file/getFile?objectKey=MEVZUAT_TEBLIGLER%2FUNIVERSAL%2F2026%2FMEVZUAT_TEBLIGLER_2026_VukTeb509_Guncel.pdf
 - Dogan Donusum gelistirici sayfasi: https://www.doganedonusum.com/dev/
 - Uyumsoft BasicIntegration WSDL: http://edonusumapi.uyum.com.tr/Services/BasicIntegration?wsdl
-- Uyumsoft MüşavirPro: https://www.uyumsoft.com/musavir-pro-mali-musavir-yazilimi
 - Nilvera API: https://developer.nilvera.com/
 - QNB eSolutions API dokumani: https://www.qnbesolutions.com.tr/api-docs-tr-final.html
 - NES e-Fatura sandbox: https://apitest.nes.com.tr/einvoice/index.html
