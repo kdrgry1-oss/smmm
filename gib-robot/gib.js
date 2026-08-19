@@ -38,6 +38,14 @@ const session = require("./session");
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 150000);
 /** Tek Playwright eyleminin varsayılan zaman aşımı. */
 const ACTION_TIMEOUT_MS = Number(process.env.ACTION_TIMEOUT_MS || 20000);
+/** Elle giriş akışında kullanıcıyı bekletmemek için kısa, kesin üst sınırlar. */
+const LOGIN_NAVIGATION_TIMEOUT_MS = Number(process.env.LOGIN_NAVIGATION_TIMEOUT_MS || 10000);
+const LOGIN_FIELD_TIMEOUT_MS = Number(process.env.LOGIN_FIELD_TIMEOUT_MS || 6000);
+const LOGIN_CAPTCHA_TIMEOUT_MS = Number(process.env.LOGIN_CAPTCHA_TIMEOUT_MS || 5000);
+const LOGIN_SUBMIT_TIMEOUT_MS = Number(process.env.LOGIN_SUBMIT_TIMEOUT_MS || 6000);
+const SESSION_CHECK_TIMEOUT_MS = Number(process.env.SESSION_CHECK_TIMEOUT_MS || 8000);
+const FAST_SCREEN_NAVIGATION_TIMEOUT_MS = Number(process.env.FAST_SCREEN_NAVIGATION_TIMEOUT_MS || 8000);
+const API_REQUEST_TIMEOUT_MS = Number(process.env.API_REQUEST_TIMEOUT_MS || 10000);
 /** Ekran görüntülerinin yazılacağı dizin (teşhis için). */
 const SHOT_DIR = process.env.SHOT_DIR || "/tmp";
 
@@ -421,7 +429,7 @@ const API_MAX_PAGES = 20;
  */
 async function apiPostJson(page, url, body) {
   return page.evaluate(
-    async ({ url, body }) => {
+    async ({ url, body, timeoutMs }) => {
       let token = null;
       try {
         token = window.sessionStorage.getItem("token");
@@ -430,22 +438,29 @@ async function apiPostJson(page, url, body) {
       }
       if (!token) return { tokenMissing: true };
       try {
-        const res = await fetch(url, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + token,
-          },
-          body: JSON.stringify(body),
-        });
-        const text = await res.text();
-        return { status: res.status, text: String(text || "") };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer " + token,
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+          const text = await res.text();
+          return { status: res.status, text: String(text || "") };
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (err) {
         return { fetchError: String((err && err.message) || err) };
       }
     },
-    { url, body }
+    { url, body, timeoutMs: API_REQUEST_TIMEOUT_MS }
   );
 }
 
@@ -711,8 +726,9 @@ async function isLoggedIn(page) {
  * @returns {Promise<{page: import('playwright').Page, reusedSession: boolean}>}
  */
 async function ensureSession(context, page, username) {
-  await page.goto(S.URLS.login, { waitUntil: "domcontentloaded" });
-  await polite();
+  await page.goto(S.URLS.login, { waitUntil: "commit", timeout: SESSION_CHECK_TIMEOUT_MS });
+  // Token ve giriş işareti çoğu kez ilk render'da gelir; sabit 1-2 sn bekleme yerine
+  // kısa seçici denetimiyle devam edilir.
 
   // Önbellekten gelen oturum hâlâ geçerli mi?
   if (await isLoggedIn(page)) {
@@ -751,11 +767,16 @@ async function openScreen(page, menuKey, options = {}) {
   for (const url of urls) {
     tried.push(`url=${url}`);
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.goto(url, {
+        waitUntil: fast ? "commit" : "domcontentloaded",
+        timeout: fast ? FAST_SCREEN_NAVIGATION_TIMEOUT_MS : 20000,
+      });
       if (!fast) {
         await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+        await polite();
+      } else {
+        await sleep(300);
       }
-      await polite();
       await assertNoManualStep(page, "screen");
 
       // Giriş ekranına düşmediysek ve ekranda liste/filtre işareti varsa başarı.
@@ -1219,8 +1240,8 @@ async function closePendingLogin(pendingId) {
 }
 
 /** Giriş ekranındaki captcha görselinin ekran görüntüsü (base64 PNG). */
-async function captureCaptchaImage(page) {
-  const locator = await S.resolve(page, "captchaImage", { timeout: 8000 });
+async function captureCaptchaImage(page, timeout = LOGIN_CAPTCHA_TIMEOUT_MS) {
+  const locator = await S.resolve(page, "captchaImage", { timeout });
   const buffer = await locator.screenshot({ type: "png" });
   return buffer.toString("base64");
 }
@@ -1247,7 +1268,7 @@ async function loginBegin({ username, password, sessionKey }) {
     const { browser: checkBrowser, context: checkContext } = await openContext(cached);
     try {
       const page = await checkContext.newPage();
-      await page.goto(S.URLS.login, { waitUntil: "domcontentloaded" });
+      await page.goto(S.URLS.login, { waitUntil: "commit", timeout: LOGIN_NAVIGATION_TIMEOUT_MS });
       await sleep(500);
       if (await isLoggedIn(page)) {
         return {
@@ -1285,10 +1306,12 @@ async function loginBegin({ username, password, sessionKey }) {
     // HIZ (kullanıcı geri bildirimi 04.08.2026: giriş ~52 sn sürüyordu):
     // "networkidle" GİB SPA'sında arka plan istekleri yüzünden geç doluyor; bunun
     // yerine doğrudan alanların görünmesini bekliyoruz (alan çıkınca sayfa hazırdır).
-    await page.goto(S.URLS.login, { waitUntil: "domcontentloaded" });
+    // GİB SPA arka plan çağrılarını uzun süre açık tutabiliyor. Yanıtın geldiği an
+    // devam edip doğrudan form alanlarını beklemek, kullanıcıyı networkidle'a bağlamaz.
+    await page.goto(S.URLS.login, { waitUntil: "commit", timeout: LOGIN_NAVIGATION_TIMEOUT_MS });
 
-    const userField = await S.resolve(page, "loginUsername", { timeout: 15000 });
-    const passField = await S.resolve(page, "loginPassword", { timeout: 8000 });
+    const userField = await S.resolve(page, "loginUsername", { timeout: LOGIN_FIELD_TIMEOUT_MS });
+    const passField = await S.resolve(page, "loginPassword", { timeout: LOGIN_FIELD_TIMEOUT_MS });
     await userField.fill(String(username));
     await passField.fill(String(password));
 
@@ -1356,14 +1379,16 @@ async function loginComplete({ pendingId, code }) {
 
   const { page, context, username } = entry;
   try {
-    const captchaField = await S.resolve(page, "captchaInput", { timeout: 8000 });
+    const captchaField = await S.resolve(page, "captchaInput", { timeout: LOGIN_FIELD_TIMEOUT_MS });
     await captchaField.fill("");
     await captchaField.fill(String(code).trim());
     await polite();
 
-    const submit = await S.resolve(page, "loginSubmit");
+    const submit = await S.resolve(page, "loginSubmit", { timeout: LOGIN_SUBMIT_TIMEOUT_MS });
     await Promise.all([
-      page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {}),
+      // Arka plan çağrıları yüzünden networkidle beklenmez; DOM hazır olunca sonucu
+      // kontrol etmek yeterlidir ve tamamlamayı saniyeler yerine dakikalara uzatmaz.
+      page.waitForLoadState("domcontentloaded", { timeout: LOGIN_SUBMIT_TIMEOUT_MS }).catch(() => {}),
       submit.click(),
     ]);
     await polite();
@@ -1691,9 +1716,8 @@ async function fetchDocuments({ username, password, from, to, sessionKey, target
  */
 async function fetchTebligat({ username, password, from, to, sessionKey, targetTaxId }) {
   return runFlow(username, password, async ({ page, jsonResponses }) => {
-    await openScreen(page, "tebligatMenu", { fast: true });
-
-    // 1) GERÇEK API — asıl yol. Başarılıysa DOM/readTable'a hiç girilmez.
+    // 1) Hızlı yol: oturum doğrulamasından sonra doğrudan GİB API'sini dene. Çoğu
+    // çekimde token zaten sessionStorage'dadır; ekran gezintisi tamamen atlanır.
     let apiError = null;
     try {
       const api = await fetchTebligatViaApi(page, { from, to });
@@ -1716,13 +1740,37 @@ async function fetchTebligat({ username, password, from, to, sessionKey, targetT
       );
     }
 
-    // 2) DOM/JSON-yakalama fallback'i (yalnız API 401 DIŞI hata verdiyse; eski akış korunur).
+    // 2) Token/servis bu sayfada henüz hazırlanmadıysa tek kısa ekran açıp API'yi bir
+    // kez daha dene. Başarıda DOM kazıması yapılmaz.
+    await openScreen(page, "tebligatMenu", { fast: true });
+    try {
+      const api = await fetchTebligatViaApi(page, { from, to });
+      console.log(
+        `[tebligat] API (ekran sonrası): ${api.items.length} kayıt döndü (ham ${api.total}); ` +
+          `çekilen sayfalar: ${api.pagesFetched.join(", ")}`
+      );
+      return {
+        ok: true,
+        message: api.items.length === 0
+          ? "Seçilen tarih aralığında GİB portalında e-Tebligat bulunamadı. (Kaynak: e-Tebligat API.)"
+          : `${api.items.length} tebligat alındı. (Kaynak: e-Tebligat API.)`,
+        items: api.items,
+      };
+    } catch (err) {
+      if (err && (err.requiresManual || err.needsCaptchaLogin)) throw err;
+      apiError = err;
+      console.warn(
+        `[tebligat] API ikinci deneme başarısız — fallback: ${String(err && err.message).slice(0, 200)}`
+      );
+    }
+
+    // 3) DOM/JSON-yakalama fallback'i (yalnız API iki kez başarısızsa).
     // Bazı GİB ekranlarında tarih filtresi yoktur → filtre yoksa tüm liste okunur.
     const rangeApplied = await tryApplyDateRange(page, from, to);
 
     // JSON yakalama: GİB ekranı listeyi XHR ile SONRADAN çekiyor → yanıt gelene
     // kadar kısa süre beklenir (canlı teşhis 05.08.2026: sayfada <table> yok).
-    await waitForListJson(jsonResponses, "tebligat", 12000);
+    await waitForListJson(jsonResponses, "tebligat", 5000);
     const captured = findListInResponses(jsonResponses, "tebligat");
     let rows;
     let missingColumns = [];

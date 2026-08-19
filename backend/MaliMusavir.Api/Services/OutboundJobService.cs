@@ -268,7 +268,7 @@ public class OutboundJobService
             {
                 var payload = Deserialize<TebligatPayload>(job.PayloadJson);
                 var tebligatService = _services.GetRequiredService<ETebligatSyncService>();
-                var result = await tebligatService.SyncAsync(payload?.ClientId, ct);
+                var result = await tebligatService.SyncAsync(payload?.ClientId, payload?.From, payload?.To, ct);
                 if (result.Success) return (true, false, null);
                 return (false, !result.Retryable, result.ErrorMessage);
             }
@@ -347,17 +347,8 @@ public class OutboundJobService
                 var retryable = false;
                 var manual = false;
 
-                // 1) Gelen belgeler (mevcut e-Fatura senkron hattı — sağlayıcı-agnostik).
-                var invoiceService = _services.GetRequiredService<EInvoiceSyncService>();
-                var invoiceResult = await invoiceService.SyncIncomingAsync(client, from, to, ct);
-                if (!invoiceResult.Success)
-                {
-                    errors.Add("Belgeler: " + invoiceResult.ErrorMessage);
-                    retryable |= invoiceResult.Retryable;
-                    manual |= GibPortalProvider.IsManualVerificationMessage(invoiceResult.ErrorMessage);
-                }
-
-                // 2) e-Tebligat (aynı kimlikle, aynı aralık).
+                // e-Tebligat önceliklidir. Belge ekranında takılan bir portal çağrısı,
+                // kanuni süreli tebligatların kayda alınmasını geciktirmemelidir.
                 var tebligatService = _services.GetRequiredService<ETebligatSyncService>();
                 var tebligatResult = await tebligatService.SyncAsync(client.Id, from, to, ct);
                 if (!tebligatResult.Success)
@@ -365,6 +356,17 @@ public class OutboundJobService
                     errors.Add("Tebligat: " + tebligatResult.ErrorMessage);
                     retryable |= tebligatResult.Retryable;
                     manual |= GibPortalProvider.IsManualVerificationMessage(tebligatResult.ErrorMessage);
+                }
+
+                // Gelen belgeler e-Tebligat sonucunu değiştirmez; aynı kuyruk işinde geride
+                // kalır. Yeni günlük tetikleyici yalnızca TypeTebligatSync kullanır.
+                var invoiceService = _services.GetRequiredService<EInvoiceSyncService>();
+                var invoiceResult = await invoiceService.SyncIncomingAsync(client, from, to, ct);
+                if (!invoiceResult.Success)
+                {
+                    errors.Add("Belgeler: " + invoiceResult.ErrorMessage);
+                    retryable |= invoiceResult.Retryable;
+                    manual |= GibPortalProvider.IsManualVerificationMessage(invoiceResult.ErrorMessage);
                 }
 
                 if (errors.Count == 0)
@@ -459,6 +461,8 @@ public class OutboundJobService
     public sealed class TebligatPayload
     {
         public Guid? ClientId { get; set; }
+        public DateTime? From { get; set; }
+        public DateTime? To { get; set; }
     }
 
     /// <summary>"FaturaSync" iş verisi.</summary>

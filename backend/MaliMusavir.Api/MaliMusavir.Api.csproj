@@ -18,7 +18,7 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.8" />
     <!-- Fiş görseli küçültme (Faz 12). Lisans: Six Labors Split License — yıllık geliri
          1M USD altındaki şirketler için ücretsizdir (bkz. README lisans notu). -->
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.7" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
 

@@ -33,8 +33,11 @@ services:
       # OTURUMU CANLI TUTMA (heartbeat): kayıtlı her GİB oturumu bu aralıkta sessizce
       # yoklanır → oturum düşmez, kullanıcı sürekli doğrulama kodu girmek zorunda kalmaz.
       # 0 yazılırsa kapanır. Oturum ömrü (kayan pencere) GIB_SESSION_TTL_HOURS ile ayarlanır.
-      GIB_KEEPALIVE_MINUTES: ${GIB_KEEPALIVE_MINUTES:-8}
-      GIB_SESSION_TTL_HOURS: ${GIB_SESSION_TTL_HOURS:-12}
+      # Beş dakikalık hafif yoklama, GİB'in hareketsiz oturumu kapatmasını azaltır.
+      # 168 saat yalnız yerel state'in deneme penceresidir; GİB oturumu geçersizse
+      # robot bunu yine doğrular ve elle giriş ister.
+      GIB_KEEPALIVE_MINUTES: ${GIB_KEEPALIVE_MINUTES:-5}
+      GIB_SESSION_TTL_HOURS: ${GIB_SESSION_TTL_HOURS:-168}
     volumes:
       # Oturum önbelleği: başarılı girişten sonra çerezler burada saklanır → her çekimde
       # yeniden şifreyle giriş yapılmaz, GİB'e giden giriş sayısı düşer.
@@ -82,6 +85,9 @@ services:
       ROBOT_TOKEN: ${ROBOT_TOKEN}
     volumes:
       - apistorage:/app/storage
+      # ASP.NET Data Protection anahtarları yeniden başlatmada değişmesin; oturum
+      # ve korunan uygulama verileri konteyner ömrüne bağlı kalmasın.
+      - dataprotection:/root/.aspnet/DataProtection-Keys
 
   web:
     build:
@@ -112,6 +118,7 @@ services:
 volumes:
   pgdata:
   apistorage:
+  dataprotection:
   caddydata:
   caddyconfig:
   # GİB portal robotu oturum önbelleği (yalnız çerezler; şifre ASLA diske yazılmaz)

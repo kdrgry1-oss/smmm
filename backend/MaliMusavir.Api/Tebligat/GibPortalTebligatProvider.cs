@@ -78,23 +78,20 @@ public class GibPortalTebligatProvider : IETebligatProvider
 
         if (hasOwnCredentials)
         {
-            // ESKİ DAVRANIŞ (korunur): mükellefin kendi kimliğiyle çekim.
-            string plain;
+            string username;
+            string password;
             try
             {
-                plain = _secretProtector.Unprotect(integration!.ApiKeyEncrypted!);
+                var plain = _secretProtector.Unprotect(integration!.ApiKeyEncrypted!);
+                if (!GibPortalProvider.TryParseCredentials(plain, out username, out password))
+                    return ProviderResult<List<ProviderTebligat>>.Fail(
+                        "GİB Portalı kimlik bilgileri eksik. Kullanıcı kodu ve şifreyi yeniden kaydedin.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "GİB portal kimliği çözülemedi. ClientId: {ClientId}", client.Id);
                 return ProviderResult<List<ProviderTebligat>>.Fail(
-                    "Kayıtlı GİB kimliği çözülemedi. Lütfen entegrasyonu yeniden kaydedin.");
-            }
-
-            if (!GibPortalProvider.TryParseCredentials(plain, out var username, out var password))
-            {
-                return ProviderResult<List<ProviderTebligat>>.Fail(
-                    "GİB Portalı kimlik bilgileri eksik. Kullanıcı kodu ve şifreyi yeniden kaydedin.");
+                    "Kayıtlı GİB kimliği çözülemedi. Lütfen GİB erişimini yeniden kaydedin.");
             }
 
             response = await _robot.GetTebligatAsync(username, password, from, to, ct);
@@ -110,9 +107,15 @@ public class GibPortalTebligatProvider : IETebligatProvider
 
             if (!hasAdvisor)
             {
+                if (integration is not null && integration.Provider != IntegrationProvider.GibPortal)
+                {
+                    return ProviderResult<List<ProviderTebligat>>.Fail(
+                        $"{integration.Provider} için e-Tebligat sağlayıcı bağlantısı tanımlı değil. " +
+                        "Kayıtlı e-belge kimliği GİB girişi olarak kullanılmadı.");
+                }
+
                 return ProviderResult<List<ProviderTebligat>>.Fail(
-                    "Bu mükellef için GİB Portalı kimliği yok. Mükellef kartından GİB kimliğini " +
-                    "kaydedin veya \"GİB Bağlantısı\" sayfasından müşavir girişini tanımlayın.");
+                    "Bu mükellef için GİB Portalı kimliği veya müşavir GİB oturumu tanımlı değil.");
             }
 
             response = await _robot.GetTebligatAsAdvisorAsync(

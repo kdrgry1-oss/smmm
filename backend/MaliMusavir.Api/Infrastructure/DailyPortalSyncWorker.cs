@@ -24,8 +24,10 @@ namespace MaliMusavir.Api.Infrastructure;
 /// </summary>
 public class DailyPortalSyncWorker : BackgroundService
 {
-    /// <summary>Günlük çalışma saati (sunucu yerel saati).</summary>
+    /// <summary>Günlük çalışma saati (Türkiye saati).</summary>
     public static readonly TimeSpan RunAt = TimeSpan.FromHours(3);
+
+    private static readonly TimeZoneInfo TurkeyTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul");
 
     /// <summary>Her gece taranan geriye dönük aralık (geç düşen belgeler yakalanır).</summary>
     public const int LookbackDays = 7;
@@ -51,16 +53,16 @@ public class DailyPortalSyncWorker : BackgroundService
             "GİB portal günlük senkron tetikleyicisi başladı (her gün {Hour:00}:{Minute:00}, son {Days} gün).",
             RunAt.Hours, RunAt.Minutes, LookbackDays);
 
-        // Açılışta bugünün penceresi geçmişse tekrar tetiklenmesin (yeniden başlatma güvenliği).
-        var now = DateTime.Now;
-        if (now.TimeOfDay >= RunAt)
-            _lastRunDate = DateOnly.FromDateTime(now);
+        // Uygulama 03:00'ten sonra açılmış olabilir. O günün taramasını atlamak yerine
+        // ilk turda bir kez kuyruğa al; _lastRunDate aynı süreçte ikinci çalışmayı engeller.
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var localNow = DateTime.Now;
+                // Docker varsayılanı UTC'dir; iş saati kullanıcıya gösterilen Türkiye
+                // saatine göre hesaplanmalıdır.
+                var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TurkeyTimeZone);
                 var today = DateOnly.FromDateTime(localNow);
 
                 if (localNow.TimeOfDay >= RunAt && _lastRunDate != today)
@@ -171,7 +173,9 @@ public class DailyPortalSyncWorker : BackgroundService
             {
                 await jobService.EnqueueAsync(
                     tenantId,
-                    OutboundJobService.TypeGibPortalSync,
+                    // e-Tebligat kanuni süreli olduğu için belge çekiminden bağımsız işlenir.
+                    // Tarih aralığı GİB robotuna doğrudan iletilir; mükerrer koruma DB'dedir.
+                    OutboundJobService.TypeTebligatSync,
                     new { clientId, from, to },
                     ct);
                 queued++;

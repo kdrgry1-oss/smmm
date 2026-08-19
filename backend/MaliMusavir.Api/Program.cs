@@ -162,6 +162,13 @@ builder.Services.AddScoped<ReceiptService>();
 // API'leri (Ödeal/Paycell/Token) ticari anlaşma gerektirdiğinden bugün BİRİNCİL yol OCR'dır;
 // anlaşma gelince gerçek adaptör bu kayıtla değiştirilir. UI'da GÖSTERİLMEZ.
 builder.Services.AddScoped<IZReportProvider, MockZReportProvider>();
+builder.Services.AddHttpClient(PayTrReportProvider.HttpClientName, client =>
+{
+    client.BaseAddress = new Uri("https://www.paytr.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<IPosReportProvider, PayTrReportProvider>();
+builder.Services.AddScoped<PosReportSyncService>();
 
 // Çoklu fiş yüklemesi: 20 dosya × 10 MB + form payı (varsayılan 128 MB sınırı yükseltilir).
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>

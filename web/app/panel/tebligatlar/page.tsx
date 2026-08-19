@@ -8,6 +8,8 @@ import {
   ETebligatList,
   ETebligatSyncResult,
   isGibManualVerificationMessage,
+  IntegrationResponse,
+  listClientIntegrations,
   listETebligat,
   markETebligatRead,
   syncETebligat,
@@ -74,6 +76,7 @@ export default function ETebligatPage() {
   const [clientsLoading, setClientsLoading] = useState(true);
   const [clientsError, setClientsError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const [integrationsByClient, setIntegrationsByClient] = useState<Record<string, IntegrationResponse>>({});
 
   // Filtreler
   const [onlyUnread, setOnlyUnread] = useState(false);
@@ -105,14 +108,21 @@ export default function ETebligatPage() {
   // Faz 17 — "Doğrulama Kodunu Gir" modalı: GİB oturumu düşen mükellef için kullanıcı
   // captcha kodunu girer (hata bandı mükellef bilgisi taşımadığından SEÇİLİ mükellef kullanılır).
   const [gibLoginOpen, setGibLoginOpen] = useState(false);
+  const [primaryGibLoginOpen, setPrimaryGibLoginOpen] = useState(false);
 
   // Mükellefleri yükle
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const list = await api<ClientResponse[]>("/api/clients");
-        if (!cancelled) setClients(list);
+        const [list, integrations] = await Promise.all([
+          api<ClientResponse[]>("/api/clients"),
+          listClientIntegrations(),
+        ]);
+        if (!cancelled) {
+          setClients(list);
+          setIntegrationsByClient(Object.fromEntries(integrations.map((item) => [item.clientId, item])));
+        }
       } catch (err) {
         if (!cancelled)
           setClientsError(
@@ -193,6 +203,18 @@ export default function ETebligatPage() {
   }
 
   const items = data?.items ?? [];
+  const selectedClient = clients.find((client) => client.id === selectedClientId);
+  const selectedIntegration = selectedClientId ? integrationsByClient[selectedClientId] : undefined;
+  const selectedUsesPrimaryGib = selectedIntegration?.provider === "GibPortal";
+  const selectedProviderName = selectedIntegration?.provider === "DoganDonusum"
+    ? "Doğan Dönüşüm"
+    : selectedIntegration?.provider === "Uyumsoft"
+      ? "Uyumsoft"
+      : selectedIntegration?.provider === "Elogo"
+        ? "eLogo"
+        : selectedIntegration?.provider === "Edm"
+          ? "EDM Bilişim"
+          : selectedIntegration?.provider ?? null;
 
   return (
     <div>
@@ -264,12 +286,22 @@ export default function ETebligatPage() {
           {isGibManualVerificationMessage(syncError) && (
             <button
               className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
-              onClick={() => setGibLoginOpen(true)}
-              title="Müşavir GİB girişindeki doğrulama kodunu girin — tek oturum tüm mükellefler için saklanır."
+              onClick={() => {
+                if (!selectedClientId) setGibLoginOpen(true);
+                else if (selectedUsesPrimaryGib) setPrimaryGibLoginOpen(true);
+                else setGibLoginOpen(true);
+              }}
+              title="Seçili GİB kaynağının doğrulama kodunu girin."
             >
               Doğrulama Kodunu Gir
             </button>
           )}
+        </div>
+      )}
+
+      {selectedClient && selectedProviderName && selectedProviderName !== "GibPortal" && selectedProviderName !== "EArsivPortal" && (
+        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+          <span><b>{selectedClient.title}</b> için kayıtlı entegratör: <b>{selectedProviderName}</b>.</span>
         </div>
       )}
 
@@ -278,6 +310,19 @@ export default function ETebligatPage() {
         <GibLoginModal
           mode="advisor"
           onClose={() => setGibLoginOpen(false)}
+          onSuccess={() => {
+            setSyncError(null);
+            handleSync();
+          }}
+        />
+      )}
+
+      {primaryGibLoginOpen && selectedClient && (
+        <GibLoginModal
+          mode="client"
+          clientId={selectedClient.id}
+          clientTitle={selectedClient.title}
+          onClose={() => setPrimaryGibLoginOpen(false)}
           onSuccess={() => {
             setSyncError(null);
             handleSync();
@@ -463,14 +508,12 @@ export default function ETebligatPage() {
         </div>
       ) : null}
 
-      <p className="mt-5 text-xs text-navy-400">
+      <p className="mt-5 text-xs text-navy-500">
         Kalan süre, tebliğ tarihini izleyen 5. iş günü sonunda &quot;tebliğ edilmiş sayılma&quot;
-        kuralı + belge türüne göre ödeme (15 gün) / itiraz (30 gün) süresinden hesaplanır.
-        Demo verileri MockUets sağlayıcısından gelir; gerçek UETS bağlantısı PTT başvurusu
-        sonrası etkinleştirilecektir. Entegrasyonu &quot;GİB Portalı (entegratör yok)&quot; olan
-        mükelleflerde tebligatlar GİB Dijital Vergi Dairesi&apos;nden robotla çekilir ve her gece
-        03:00&apos;te otomatik yenilenir; GİB ek doğrulama isterse ilgili mükellef &quot;Elle
-        doğrulama gerekli&quot; olarak işaretlenir.
+        kuralı + belge türüne göre ödeme (15 gün) / itiraz (30 gün) süresinden hesaplanır. Bu ekran
+        yalnız şirket e-Tebligatlarını GİB Dijital Vergi Dairesi kaynağından izler; PTT UETS burada
+        kullanılmaz. Müşavir yetkisiyle açılan GİB oturumu tanımlı tüm yetkili mükelleflerde kullanılır;
+        GİB ek doğrulama isterse kod insan tarafından girilmelidir.
       </p>
     </div>
   );

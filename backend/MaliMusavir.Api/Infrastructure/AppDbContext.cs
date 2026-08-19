@@ -98,6 +98,7 @@ public class AppDbContext : DbContext
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<BankStatementImport> BankStatementImports => Set<BankStatementImport>();
     public DbSet<BankCounterpartyMap> BankCounterpartyMaps => Set<BankCounterpartyMap>();
+    public DbSet<PosConnection> PosConnections => Set<PosConnection>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -437,6 +438,20 @@ public class AppDbContext : DbContext
 
             // Tenant izolasyonu: mevcut kalıpla (SuperAdmin hariç yalnız kendi kayıtları).
             e.HasQueryFilter(b => _isSuperAdmin || b.TenantId == _tenantId);
+        });
+
+        modelBuilder.Entity<PosConnection>(e =>
+        {
+            e.Property(x => x.DisplayName).HasMaxLength(160).IsRequired();
+            e.Property(x => x.MerchantId).HasMaxLength(160);
+            e.Property(x => x.TerminalId).HasMaxLength(160);
+            e.Property(x => x.DeviceSerialNumber).HasMaxLength(160);
+            e.Property(x => x.ApiCredentialEncrypted).HasMaxLength(4000);
+            e.Property(x => x.ConnectionStatus).HasMaxLength(80).IsRequired();
+            e.Property(x => x.LastError).HasMaxLength(1000);
+            e.HasIndex(x => new { x.TenantId, x.ClientId, x.Provider });
+            e.HasOne(x => x.Client).WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Cascade);
+            e.HasQueryFilter(x => _isSuperAdmin || x.TenantId == _tenantId);
         });
 
         // ---------- Faz 13: Mükellef araçları (plaka) ----------
