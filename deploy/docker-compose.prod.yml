@@ -28,6 +28,8 @@ services:
     environment:
       ROBOT_TOKEN: ${ROBOT_TOKEN}
       SESSION_DIR: /data/sessions
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
       # Ekran görüntüleri teşhis için /tmp'e yazılır (docker logs gib-robot ile dosya adı görünür).
       SHOT_DIR: /tmp
       # OTURUMU CANLI TUTMA (heartbeat): kayıtlı her GİB oturumu bu aralıkta sessizce

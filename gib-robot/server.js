@@ -303,6 +303,13 @@ app.post("/advisor/login-begin", async (req, res) => {
 app.post("/advisor/login-complete", loginCompleteHandler);
 
 /**
+ * OTOMATİK GİRİŞ (Auto-Login with OCR):
+ * GİB giriş ekranını açar, şifreyi girer, captcha'yı otomatik çözer ve oturumu açar.
+ */
+app.post("/auto-login", handler("auto-login", false, (p) => gib.autoLogin(p)));
+app.post("/advisor/auto-login", handler("advisor/auto-login", false, (p) => gib.autoLogin(p)));
+
+/**
  * MÜŞAVİRE BAĞLI MÜKELLEF LİSTESİ: müşavir oturumuyla portaldaki mükellef listesi
  * ekranı açılır ve dönen JSON yakalanır → [{taxId, title}]. Şifre GEREKMEZ; oturum
  * yoksa needsCaptchaLogin bayraklı yanıt döner.

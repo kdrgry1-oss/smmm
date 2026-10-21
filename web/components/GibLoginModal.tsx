@@ -91,9 +91,9 @@ export default function GibLoginModal({
       const result =
         mode === "advisor" ? await beginGibAdvisorLogin() : await beginGibLogin(clientId!);
       if (result.alreadyLoggedIn) {
-        // Kayıtlı oturum hâlâ geçerli — koda gerek yok.
+        // Giriş yapıldı (kayıtlı oturum veya OCR ile otomatik çözüldü)
         finishWithSuccess(
-          "Oturum kaydedildi — 12 saat boyunca doğrulama kodu istenmeyecek."
+          result.message || "GİB oturumu başarıyla açıldı (OCR ile çözüldü) — uyarı kaldırıldı."
         );
         return;
       }
@@ -221,7 +221,7 @@ export default function GibLoginModal({
           <div className="mt-6 flex flex-col items-center gap-3 py-8">
             <span className="h-8 w-8 animate-spin rounded-full border-4 border-navy-200 border-t-navy-600" />
             <p className="text-sm text-navy-500">
-              GİB giriş ekranı açılıyor, doğrulama kodu görseli getiriliyor...
+              GİB giriş ekranı açılıyor, güvenlik kodu otomatik çözülüyor (OCR)...
             </p>
           </div>
         ) : (

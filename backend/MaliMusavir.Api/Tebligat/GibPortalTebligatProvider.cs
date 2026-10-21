@@ -126,8 +126,59 @@ public class GibPortalTebligatProvider : IETebligatProvider
 
         if (response.RequiresManual || response.NeedsCaptchaLogin)
         {
-            // Faz 17: needsCaptchaLogin → kayıtlı GİB oturumu yok/geçersiz; kullanıcı
-            // "GİB Oturumu Aç" ile doğrulama kodunu girmeli (kuyruk tekrar denemez).
+            if (hasOwnCredentials)
+            {
+                try
+                {
+                    var plain = _secretProtector.Unprotect(integration!.ApiKeyEncrypted!);
+                    if (GibPortalProvider.TryParseCredentials(plain, out var u, out var p))
+                    {
+                        _logger.LogInformation("GİB mükellef tebligat oturumu düşmüş; otomatik OCR girişi başlatılıyor. ClientId: {ClientId}", client.Id);
+                        var autoLoginRes = await _robot.AutoLoginAsync(u, p, ct);
+                        if (autoLoginRes.Ok)
+                        {
+                            _logger.LogInformation("GİB otomatik OCR girişi başarılı! Mükellef tebligat çekimi tekrarlanıyor.");
+                            response = await _robot.GetTebligatAsync(u, p, from, to, ct);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Otomatik GİB mükellef girişi denendi fakat hata oluştu.");
+                }
+            }
+            else
+            {
+                // Müşavir kimliği tanımlıysa otomatik giriş dene (Yerel OCR ile captcha çözümü)
+                var advisorCred = await _db.TenantGibCredentials
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.TenantId == client.TenantId, ct);
+
+                if (advisorCred is not null)
+                {
+                    try
+                    {
+                        var pass = _secretProtector.Unprotect(advisorCred.PasswordEncrypted);
+                        var sessionKey = GibRobotClient.AdvisorSessionKey(client.TenantId);
+                        _logger.LogInformation("GİB oturumu düşmüş; otomatik OCR girişi başlatılıyor. TenantId: {TenantId}", client.TenantId);
+                        var autoLoginRes = await _robot.AutoAdvisorLoginAsync(advisorCred.Username, pass, sessionKey, ct);
+                        if (autoLoginRes.Ok)
+                        {
+                            _logger.LogInformation("GİB otomatik OCR girişi başarılı! Tebligat çekimi tekrarlanıyor.");
+                            response = await _robot.GetTebligatAsAdvisorAsync(sessionKey, client.TaxId, from, to, ct);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Otomatik GİB girişi denendi fakat hata oluştu.");
+                    }
+                }
+            }
+        }
+
+        if (response.RequiresManual || response.NeedsCaptchaLogin)
+        {
+            // Otomatik giriş de başarısız olduysa manuel giriş uyarısı yaz
             return ProviderResult<List<ProviderTebligat>>.Fail(
                 GibPortalProvider.BuildManualVerificationMessage(response.Message), retryable: false);
         }

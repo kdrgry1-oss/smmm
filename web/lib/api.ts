@@ -1447,6 +1447,7 @@ export interface ETebligatItem {
   id: string;
   clientId: string;
   clientTitle: string | null;
+  externalId?: string;
   sender: string;
   subject: string;
   deliveredAt: string;

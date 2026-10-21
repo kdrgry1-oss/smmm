@@ -51,6 +51,10 @@ const SCREEN_URLS = {
     "https://dijital.gib.gov.tr/portal/tebligat",
   ],
   documentsMenu: [
+    "https://dijital.gib.gov.tr/portal/e-belge",
+    "https://dijital.gib.gov.tr/portal/e-belge-bilgilerim",
+    "https://dijital.gib.gov.tr/portal/eBelge",
+    "https://dijital.gib.gov.tr/portal/eBelgeBilgilerim",
     "https://dijital.gib.gov.tr/portal/adima-duzenlenen-belgeler",
     "https://dijital.gib.gov.tr/portal/adimaDuzenlenenBelgeler",
     "https://dijital.gib.gov.tr/portal/adima-duzenlenen-e-belgeler",
@@ -100,7 +104,7 @@ const API_ENDPOINTS = {
  * (ör. "Adıma Düzenlenen Belgeler" ↔ "Adıma Düzenlenen e-Belgeler").
  */
 const SCREEN_NAMES = {
-  documents: /Adıma\s+Düzenlenen(\s+e-?)?\s*Belgeler/i,
+  documents: /e-?\s*Belge(\s*Bilgilerim)?|Adıma\s+Düzenlenen(\s+e-?)?\s*Belgeler/i,
   // "e-Tebligat", "e-Tebligatlarım", "E Tebligat" — hepsini kapsar.
   tebligat: /e-?\s*Tebligat(lar[ıi]m)?/i,
   // Faz 18: "Mükellef İşlemleri", "Müşavir İşlemleri", "Mükelleflerim" vb.
@@ -208,12 +212,14 @@ const SELECTORS = {
   // ---------------- Menü / gezinme ----------------
 
   documentsMenu: {
-    description: "Menü — \"Adıma Düzenlenen Belgeler\" bağlantısı",
+    description: "Menü — \"e-Belge Bilgilerim\" veya \"Adıma Düzenlenen Belgeler\" bağlantısı",
     candidates: [
       { role: "link", name: SCREEN_NAMES.documents },
       { role: "button", name: SCREEN_NAMES.documents },
       { role: "menuitem", name: SCREEN_NAMES.documents },
       { text: SCREEN_NAMES.documents },
+      { css: "a[href*='e-belge']" },
+      { css: "a[href*='eBelge']" },
       { css: "a[href*='adima-duzenlenen']" },
       { css: "a[href*='belge']" },
     ],

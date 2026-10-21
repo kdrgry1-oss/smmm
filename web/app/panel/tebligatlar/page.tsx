@@ -29,6 +29,25 @@ function toDateInputValue(date: Date): string {
 }
 
 /**
+ * 213 Sayılı VUK md. 107/A ve 7201 Sayılı Tebligat Kanunu md. 7/a:
+ * Elektronik tebligat, muhatabın elektronik adresine ulaştığı tarihi izleyen
+ * 5. iş gününün sonunda tebliğ edilmiş sayılır. Yasal hak düşürücü süreler bu tarihten sonra başlar.
+ */
+function getDeemedServedDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  let count = 0;
+  const current = new Date(d);
+  while (count < 5) {
+    current.setDate(current.getDate() + 1);
+    const day = current.getDay();
+    if (day !== 0 && day !== 6) count++;
+  }
+  return current.toLocaleDateString("tr-TR");
+}
+
+/**
  * Kalan süre sayacı: >7 gün yeşil, 3-7 gün sarı, 1-2 gün kırmızı "⚠ N gün kaldı",
  * 0 ve altı koyu kırmızı "Süre doldu", süresiz belgeler gri "Süresiz".
  */
@@ -77,6 +96,9 @@ export default function ETebligatPage() {
   const [clientsError, setClientsError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [integrationsByClient, setIntegrationsByClient] = useState<Record<string, IntegrationResponse>>({});
+
+  // Tebligat inceleme / okuma modalı
+  const [selectedItem, setSelectedItem] = useState<ETebligatItem | null>(null);
 
   // Filtreler
   const [onlyUnread, setOnlyUnread] = useState(false);
@@ -444,7 +466,7 @@ export default function ETebligatPage() {
         </div>
       ) : items.length > 0 ? (
         <div className="mt-6 overflow-x-auto rounded-xl border border-navy-100 bg-white shadow-sm">
-          <table className="w-full min-w-[1020px] text-left text-sm">
+          <table className="w-full min-w-[1080px] text-left text-sm">
             <thead className="border-b border-navy-100 bg-navy-50 text-xs uppercase tracking-wide text-navy-500">
               <tr>
                 <th className="px-4 py-3">Mükellef</th>
@@ -454,13 +476,15 @@ export default function ETebligatPage() {
                 <th className="px-4 py-3">Süre Türü</th>
                 <th className="px-4 py-3">Kalan Süre</th>
                 <th className="px-4 py-3">Okundu</th>
+                <th className="px-4 py-3 text-right">İşlem</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-navy-50">
               {items.map((item) => (
                 <tr
                   key={item.id}
-                  className={`transition hover:bg-navy-50/60 ${!item.isRead ? "bg-amber-50/40" : ""}`}
+                  onClick={() => setSelectedItem(item)}
+                  className={`cursor-pointer transition hover:bg-navy-50/80 ${!item.isRead ? "bg-amber-50/40" : ""}`}
                 >
                   <td className="px-4 py-3 font-medium text-navy-900">
                     {item.clientTitle ?? "—"}
@@ -483,7 +507,7 @@ export default function ETebligatPage() {
                   <td className="px-4 py-3">
                     <DeadlineBadge item={item} />
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     {item.isRead ? (
                       <span className="text-xs font-medium text-green-700" title={item.readAt ? `Okundu: ${formatDate(item.readAt)}` : undefined}>
                         ✓ Okundu
@@ -501,6 +525,15 @@ export default function ETebligatPage() {
                       </button>
                     )}
                   </td>
+                  <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedItem(item)}
+                      className="rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 shadow-sm hover:bg-navy-50 hover:text-navy-900"
+                    >
+                      İncele / Oku ↗
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -515,6 +548,213 @@ export default function ETebligatPage() {
         kullanılmaz. Müşavir yetkisiyle açılan GİB oturumu tanımlı tüm yetkili mükelleflerde kullanılır;
         GİB ek doğrulama isterse kod insan tarafından girilmelidir.
       </p>
+
+      {/* Tebligat İnceleme ve Yasal Süre Modalı */}
+      {selectedItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/60 p-4 backdrop-blur-sm"
+          onClick={() => setSelectedItem(null)}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl border border-navy-100 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Başlığı */}
+            <div className="flex items-center justify-between border-b border-navy-100 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-navy-950">e-Tebligat İnceleme</h2>
+                  <p className="text-xs text-navy-500">
+                    213 Sayılı VUK md. 107/A uyarınca yasal süre ve tebligat ayrıntıları
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <DeadlineBadge item={selectedItem} />
+                <button
+                  type="button"
+                  onClick={() => setSelectedItem(null)}
+                  className="rounded-lg p-1.5 text-navy-400 hover:bg-navy-50 hover:text-navy-700"
+                >
+                  <span className="sr-only">Kapat</span>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Gövdesi */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Temel Bilgiler Grid */}
+              <div className="rounded-xl border border-navy-100 bg-navy-50/50 p-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wider text-navy-400">
+                      Mükellef
+                    </span>
+                    <p className="mt-0.5 text-sm font-bold text-navy-900">
+                      {selectedItem.clientTitle ?? "—"}
+                    </p>
+                    {clients.find((c) => c.id === selectedItem.clientId)?.taxId && (
+                      <p className="text-xs font-mono text-navy-500">
+                        VKN/TCKN: {clients.find((c) => c.id === selectedItem.clientId)?.taxId}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-wider text-navy-400">
+                      Gönderen Kurum / Vergi Dairesi
+                    </span>
+                    <p className="mt-0.5 text-sm font-semibold text-navy-900">
+                      {selectedItem.sender}
+                    </p>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-navy-400">
+                      Tebligat Konusu &amp; Belge Türü
+                    </span>
+                    <p className="mt-0.5 text-sm font-medium text-navy-900 bg-white p-2.5 rounded-lg border border-navy-100">
+                      {selectedItem.subject}
+                    </p>
+                  </div>
+                  {selectedItem.externalId && (
+                    <div className="sm:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-navy-400">
+                        Belge / Tebliğ Referans No
+                      </span>
+                      <p className="mt-0.5 font-mono text-xs text-navy-600 select-all">
+                        {selectedItem.externalId}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Yasal Süre Zaman Çizelgesi */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-navy-500 mb-3">
+                  Yasal Süre Takvimi (VUK md. 107/A)
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="rounded-xl border border-navy-200 bg-white p-3.5 shadow-sm">
+                    <div className="flex items-center gap-1.5 text-navy-500 text-xs font-semibold">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-navy-100 text-navy-700 text-[11px] font-bold">1</span>
+                      Tebliğ Tarihi
+                    </div>
+                    <p className="mt-2 text-base font-bold text-navy-950">
+                      {formatDate(selectedItem.deliveredAt)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-navy-400">
+                      Elektronik kutuya ulaştığı an
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3.5 shadow-sm">
+                    <div className="flex items-center gap-1.5 text-blue-800 text-xs font-semibold">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-200 text-blue-900 text-[11px] font-bold">2</span>
+                      Tebliğ Sayılma
+                    </div>
+                    <p className="mt-2 text-base font-bold text-blue-950">
+                      {getDeemedServedDate(selectedItem.deliveredAt)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-blue-600">
+                      İzleyen 5. iş günü sonu
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 shadow-sm">
+                    <div className="flex items-center gap-1.5 text-amber-800 text-xs font-semibold">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-200 text-amber-900 text-[11px] font-bold">3</span>
+                      Yasal Son Gün
+                    </div>
+                    <p className="mt-2 text-base font-bold text-amber-950">
+                      {formatDate(selectedItem.legalDeadline)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-amber-700 font-medium">
+                      Tür: {selectedItem.deadlineType ?? "Belirtilmemiş"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hukuki Açıklama Kartı */}
+              <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4 text-xs text-blue-900">
+                <p className="font-semibold text-blue-950">Hukuki Süre Hesabı Bilgilendirmesi:</p>
+                <p className="mt-1 leading-relaxed text-blue-800">
+                  213 sayılı Vergi Usul Kanunu&apos;nun 107/A maddesi ve 7201 sayılı Tebligat Kanunu&apos;nun 7/a maddesi gereğince,
+                  elektronik ortamda tebliğ edilen evrak muhatabın elektronik adresine ulaştığı tarihi izleyen beşinci günün
+                  sonunda tebliğ edilmiş sayılır. Dava açma (30 gün), ödeme (15 gün) veya itiraz süreleri bu tebliğ edilmiş sayılma
+                  tarihinden itibaren işlemeye başlar.
+                </p>
+              </div>
+
+              {/* GİB Portalı Belge Görüntüleme Yönlendirmesi */}
+              <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-bold text-amber-950">
+                      Resmi Belge &amp; Ekler (PDF)
+                    </h4>
+                    <p className="mt-0.5 text-xs text-amber-800">
+                      Gelir İdaresi Başkanlığı güvenlik protokolü gereği resmi üst yazı ve ekli tahakkuk belgeleri doğrudan GİB Dijital Vergi Dairesi portalında saklanır.
+                    </p>
+                  </div>
+                  <a
+                    href="https://dijital.gib.gov.tr/portal/eTebligatlarim"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-amber-700"
+                  >
+                    GİB e-Tebligat Portalında Aç ↗
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Alt Kısmı (Aksiyonlar) */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-navy-100 bg-navy-50/50 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 shadow-sm hover:bg-navy-50"
+              >
+                🖨 Yazdır / PDF Kaydet
+              </button>
+
+              <div className="flex items-center gap-3">
+                {!selectedItem.isRead && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (selectedItem) {
+                        await handleMarkRead(selectedItem.id);
+                        setSelectedItem((prev) => prev ? { ...prev, isRead: true, readAt: new Date().toISOString() } : null);
+                      }
+                    }}
+                    disabled={markingId === selectedItem.id}
+                    className="rounded-lg bg-green-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {markingId === selectedItem.id ? "İşleniyor..." : "✓ Okundu Olarak İşaretle"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedItem(null)}
+                  className="rounded-lg border border-navy-300 bg-white px-4 py-1.5 text-xs font-semibold text-navy-700 shadow-sm hover:bg-navy-50"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

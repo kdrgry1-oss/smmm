@@ -139,6 +139,27 @@ public class GibAdvisorController : ControllerBase
         }
 
         var sessionKey = GibRobotClient.AdvisorSessionKey(TenantId.Value);
+
+        // 1. ÖNCE OTOMATİK GİRİŞ DENE (Yerel OCR ile Captcha Çözümü):
+        try
+        {
+            var autoResult = await _gibRobot.AutoAdvisorLoginAsync(credential.Username, password, sessionKey, ct);
+            if (autoResult.Ok)
+            {
+                return Ok(new GibLoginBeginResponse
+                {
+                    Success = true,
+                    AlreadyLoggedIn = true,
+                    Message = "Müşavir GİB oturumu otomatik olarak açıldı (OCR ile çözüldü)."
+                });
+            }
+        }
+        catch
+        {
+            // fallback
+        }
+
+        // 2. Otomatik OCR çözemezse manuel fallback:
         var result = await _gibRobot.BeginAdvisorLoginAsync(credential.Username, password, sessionKey, ct);
 
         return Ok(new GibLoginBeginResponse

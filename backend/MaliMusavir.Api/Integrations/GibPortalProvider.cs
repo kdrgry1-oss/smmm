@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MaliMusavir.Api.Domain;
+using MaliMusavir.Api.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 
 namespace MaliMusavir.Api.Integrations;
 
@@ -44,11 +46,19 @@ public class GibPortalProvider : IEInvoiceProvider
     };
 
     private readonly GibRobotClient _robot;
+    private readonly AppDbContext _db;
+    private readonly ISecretProtector _secretProtector;
     private readonly ILogger<GibPortalProvider> _logger;
 
-    public GibPortalProvider(GibRobotClient robot, ILogger<GibPortalProvider> logger)
+    public GibPortalProvider(
+        GibRobotClient robot,
+        AppDbContext db,
+        ISecretProtector secretProtector,
+        ILogger<GibPortalProvider> logger)
     {
         _robot = robot;
+        _db = db;
+        _secretProtector = secretProtector;
         _logger = logger;
     }
 
@@ -234,9 +244,54 @@ public class GibPortalProvider : IEInvoiceProvider
 
         if (response.RequiresManual || response.NeedsCaptchaLogin)
         {
-            // GÜVENLİK KURALI: çözmeye çalışılmaz, tekrar denenmez. needsCaptchaLogin
-            // (Faz 17): kayıtlı GİB oturumu yok/geçersiz → kullanıcı "GİB Oturumu Aç"
-            // düğmesiyle doğrulama kodunu girmeli; mesaj robotun yönlendirmesini taşır.
+            if (TryParseAdvisorCredentials(apiKey, out var advisorTenantId2, out var targetTaxId2))
+            {
+                var advisorCred = await _db.TenantGibCredentials
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.TenantId == advisorTenantId2, ct);
+
+                if (advisorCred is not null)
+                {
+                    try
+                    {
+                        var pass = _secretProtector.Unprotect(advisorCred.PasswordEncrypted);
+                        var sessionKey = GibRobotClient.AdvisorSessionKey(advisorTenantId2);
+                        _logger.LogInformation("GİB fatura oturumu düşmüş; otomatik OCR girişi başlatılıyor. TenantId: {TenantId}", advisorTenantId2);
+                        var autoLoginRes = await _robot.AutoAdvisorLoginAsync(advisorCred.Username, pass, sessionKey, ct);
+                        if (autoLoginRes.Ok)
+                        {
+                            _logger.LogInformation("GİB otomatik OCR girişi başarılı! Fatura çekimi tekrarlanıyor.");
+                            response = await _robot.GetDocumentsAsAdvisorAsync(sessionKey, targetTaxId2, from.Date, to.Date, ct);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Otomatik GİB müşavir girişi denendi fakat hata oluştu.");
+                    }
+                }
+            }
+            else if (TryParseCredentials(apiKey, out var username2, out var password2))
+            {
+                try
+                {
+                    _logger.LogInformation("GİB mükellef fatura oturumu düşmüş; otomatik OCR girişi başlatılıyor. Kullanıcı: {Username}", username2);
+                    var autoLoginRes = await _robot.AutoLoginAsync(username2, password2, ct);
+                    if (autoLoginRes.Ok)
+                    {
+                        _logger.LogInformation("GİB otomatik OCR girişi başarılı! Mükellef fatura çekimi tekrarlanıyor.");
+                        response = await _robot.GetDocumentsAsync(username2, password2, from.Date, to.Date, ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Otomatik GİB mükellef girişi denendi fakat hata oluştu.");
+                }
+            }
+        }
+
+        if (response.RequiresManual || response.NeedsCaptchaLogin)
+        {
+            // Otomatik giriş de başarısız olduysa manuel giriş uyarısı yaz
             return ProviderResult<List<ProviderInvoice>>.Fail(
                 BuildManualVerificationMessage(response.Message), retryable: false);
         }

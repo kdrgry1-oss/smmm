@@ -245,6 +245,24 @@ public class GibRobotClient
         PostEnvelopeAsync<RobotLoginComplete>("/advisor/login-complete", new { pendingId, code }, ct);
 
     /// <summary>
+    /// Müşavir otomatik girişi (/advisor/auto-login): robot captcha'yı yerel OCR ile çözüp
+    /// oturumu açar.
+    /// </summary>
+    public Task<RobotLoginComplete> AutoAdvisorLoginAsync(
+        string username, string password, string sessionKey, CancellationToken ct) =>
+        PostEnvelopeAsync<RobotLoginComplete>("/advisor/auto-login",
+            new { username, password, sessionKey }, ct);
+
+    /// <summary>
+    /// Mükellef otomatik girişi (/auto-login): robot captcha'yı yerel OCR ile çözüp
+    /// oturumu açar.
+    /// </summary>
+    public Task<RobotLoginComplete> AutoLoginAsync(
+        string username, string password, CancellationToken ct) =>
+        PostEnvelopeAsync<RobotLoginComplete>("/auto-login",
+            new { username, password }, ct);
+
+    /// <summary>
     /// Müşavire bağlı mükellef listesi (/advisor/clients): müşavir oturumuyla portaldaki
     /// mükellef listesi ekranına gidilir, dönen JSON yakalanır → [{taxId, title}].
     /// </summary>

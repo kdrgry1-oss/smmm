@@ -1308,6 +1308,7 @@ public class ETebligatItemResponse
     public Guid Id { get; set; }
     public Guid ClientId { get; set; }
     public string? ClientTitle { get; set; }
+    public string ExternalId { get; set; } = string.Empty;
     public string Sender { get; set; } = string.Empty;
     public string Subject { get; set; } = string.Empty;
     public DateTime DeliveredAt { get; set; }
@@ -1332,6 +1333,7 @@ public class ETebligatItemResponse
             Id = m.Id,
             ClientId = m.ClientId,
             ClientTitle = clientTitle,
+            ExternalId = m.ExternalId,
             Sender = m.Sender,
             Subject = m.Subject,
             DeliveredAt = m.DeliveredAt,

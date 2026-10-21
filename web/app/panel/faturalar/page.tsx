@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ACCOUNT_CODE_REGEX,
   api,
@@ -132,6 +132,7 @@ export default function EInvoicesPage() {
   const [clientsLoading, setClientsLoading] = useState(true);
   const [clientsError, setClientsError] = useState<string | null>(null);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
+  const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
 
   // Ortak "Veri İçe Aktar" modalı (mükellef seçici modal içindedir).
   const [importOpen, setImportOpen] = useState(false);
@@ -1066,6 +1067,7 @@ export default function EInvoicesPage() {
                   </th>
                   <th className="px-4 py-3">Tarih</th>
                   <th className="px-4 py-3">Fatura No</th>
+                  <th className="px-4 py-3">Mükellef</th>
                   <th className="px-4 py-3">Satıcı</th>
                   <th className="px-4 py-3 text-right">Matrah</th>
                   <th className="px-4 py-3 text-right">KDV</th>
@@ -1080,6 +1082,7 @@ export default function EInvoicesPage() {
                   const badge = statusBadges[invoice.status] ?? statusBadges.New;
                   const codingBadge = codingBadges[invoice.codingStatus] ?? codingBadges.Uncoded;
                   const isApproved = invoice.codingStatus === "Approved";
+                  const client = clientMap.get(invoice.clientId);
                   return (
                     <tr
                       key={invoice.id}
@@ -1098,6 +1101,14 @@ export default function EInvoicesPage() {
                       </td>
                       <td className="px-4 py-3">{formatDate(invoice.issueDate)}</td>
                       <td className="px-4 py-3 font-mono text-xs">{invoice.invoiceNumber}</td>
+                      <td className="px-4 py-3">
+                        <span className="font-medium text-navy-900">{client?.title ?? "—"}</span>
+                        {client?.taxId && (
+                          <span className="block font-mono text-xs text-navy-400">
+                            VKN: {client.taxId}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className="font-medium text-navy-900">{invoice.senderTitle}</span>
                         <span className="block font-mono text-xs text-navy-400">
@@ -1252,6 +1263,19 @@ export default function EInvoicesPage() {
               <>
                 {/* Başlık bilgileri */}
                 <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                  <div className="col-span-2 rounded-lg bg-navy-50/80 p-3 border border-navy-100">
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-navy-500">
+                      Mükellef (Faturanın Ait Olduğu Müşteri)
+                    </dt>
+                    <dd className="mt-0.5 text-sm font-bold text-navy-950">
+                      {clientMap.get(detail.clientId)?.title ?? "—"}
+                    </dd>
+                    {clientMap.get(detail.clientId)?.taxId && (
+                      <span className="font-mono text-xs text-navy-500">
+                        VKN/TCKN: {clientMap.get(detail.clientId)?.taxId}
+                      </span>
+                    )}
+                  </div>
                   <div>
                     <dt className="text-xs font-medium uppercase tracking-wide text-navy-400">
                       Satıcı
@@ -1260,7 +1284,7 @@ export default function EInvoicesPage() {
                   </div>
                   <div>
                     <dt className="text-xs font-medium uppercase tracking-wide text-navy-400">
-                      VKN / TCKN
+                      Satıcı VKN / TCKN
                     </dt>
                     <dd className="mt-0.5 font-mono">{detail.senderTaxId}</dd>
                   </div>

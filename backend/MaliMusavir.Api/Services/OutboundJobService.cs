@@ -269,7 +269,16 @@ public class OutboundJobService
                 var payload = Deserialize<TebligatPayload>(job.PayloadJson);
                 var tebligatService = _services.GetRequiredService<ETebligatSyncService>();
                 var result = await tebligatService.SyncAsync(payload?.ClientId, payload?.From, payload?.To, ct);
-                if (result.Success) return (true, false, null);
+                if (result.Success)
+                {
+                    if (payload?.ClientId is not null && payload.ClientId != Guid.Empty)
+                    {
+                        var integration = await _db.ClientIntegrations
+                            .FirstOrDefaultAsync(ci => ci.ClientId == payload.ClientId, ct);
+                        await SetGibPortalWarningAsync(integration, null, ct);
+                    }
+                    return (true, false, null);
+                }
                 return (false, !result.Retryable, result.ErrorMessage);
             }
 

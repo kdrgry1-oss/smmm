@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "express": "4.21.2",
-    "playwright": "1.47.2"
+    "playwright": "1.47.2",
+    "tesseract.js": "^5.1.1"
   }
 }

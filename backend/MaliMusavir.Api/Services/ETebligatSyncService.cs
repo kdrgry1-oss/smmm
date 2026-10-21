@@ -162,6 +162,11 @@ public class ETebligatSyncService
                 continue;
             }
 
+            if (integrationProvider == IntegrationProvider.GibPortal)
+            {
+                await WriteGibPortalWarningAsync(client.Id, null, ct);
+            }
+
             var incomingIds = result.Data
                 .Select(m => m.ExternalId)
                 .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -223,10 +228,10 @@ public class ETebligatSyncService
 
     /// <summary>
     /// GİB Portal entegrasyonuna "Elle doğrulama gerekli / GİB oturumu yenilenmeli" uyarısını
-    /// yazar (OutboundJobService.SetGibPortalWarningAsync ile aynı kalıp — ŞEMA DEĞİŞİKLİĞİ
+    /// yazar veya temizler (OutboundJobService.SetGibPortalWarningAsync ile aynı kalıp — ŞEMA DEĞİŞİKLİĞİ
     /// YOKTUR: uyarı, kimlik JSON'unun içinde şifreli kolonda taşınır). Şifre LOGLANMAZ.
     /// </summary>
-    private async Task WriteGibPortalWarningAsync(Guid clientId, string warning, CancellationToken ct)
+    private async Task WriteGibPortalWarningAsync(Guid clientId, string? warning, CancellationToken ct)
     {
         var integration = await _db.ClientIntegrations
             .FirstOrDefaultAsync(ci => ci.ClientId == clientId, ct);
@@ -254,15 +259,18 @@ public class ETebligatSyncService
             return;
         }
 
-        var normalized = warning.Trim();
+        var normalized = string.IsNullOrWhiteSpace(warning) ? null : warning.Trim();
         if (string.Equals(existingWarning, normalized, StringComparison.Ordinal)) return;
 
         integration.ApiKeyEncrypted = _secretProtector.Protect(
-            GibPortalProvider.PackCredentials(username, password, normalized, DateTime.UtcNow));
+            GibPortalProvider.PackCredentials(
+                username, password, normalized, normalized is null ? null : DateTime.UtcNow));
         await _db.SaveChangesAsync(ct);
 
         _logger.LogWarning(
-            "GİB portal entegrasyonuna oturum yenileme uyarısı yazıldı. ClientId: {ClientId}", clientId);
+            normalized is null
+                ? "GİB portal uyarısı temizlendi. ClientId: {ClientId}"
+                : "GİB portal entegrasyonuna oturum yenileme uyarısı yazıldı. ClientId: {ClientId}", clientId);
     }
 
     /// <summary>

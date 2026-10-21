@@ -394,6 +394,27 @@ public class IntegrationsController : ControllerBase
         if (credentials.Error is not null)
             return BadRequest(new { message = credentials.Error });
 
+        // 1. ÖNCE OTOMATİK GİRİŞ DENE (Yerel OCR ile Captcha Çözümü):
+        try
+        {
+            var autoResult = await _gibRobot.AutoLoginAsync(credentials.Username!, credentials.Password!, ct);
+            if (autoResult.Ok)
+            {
+                await ClearGibManualWarningAsync(clientId, ct);
+                return Ok(new GibLoginBeginResponse
+                {
+                    Success = true,
+                    AlreadyLoggedIn = true,
+                    Message = "GİB oturumu otomatik olarak açıldı (OCR ile çözüldü). Çekimler devam edebilir."
+                });
+            }
+        }
+        catch
+        {
+            // Otomatik giriş hatasında manuel akışa düşülür
+        }
+
+        // 2. Otomatik OCR çözemezse manuel fallback:
         var result = await _gibRobot.BeginLoginAsync(credentials.Username!, credentials.Password!, ct);
 
         // Kayıtlı oturum hâlâ geçerliyse koda gerek yok → varsa eski uyarı temizlenir.

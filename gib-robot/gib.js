@@ -33,6 +33,7 @@ const path = require("path");
 const { chromium } = require("playwright");
 const S = require("./selectors");
 const session = require("./session");
+const captchaSolver = require("./captcha-solver");
 
 /** Tek isteğin toplam bütçesi. */
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 150000);
@@ -769,7 +770,7 @@ async function openScreen(page, menuKey, options = {}) {
     try {
       await page.goto(url, {
         waitUntil: fast ? "commit" : "domcontentloaded",
-        timeout: fast ? FAST_SCREEN_NAVIGATION_TIMEOUT_MS : 20000,
+        timeout: fast ? FAST_SCREEN_NAVIGATION_TIMEOUT_MS : 5000,
       });
       if (!fast) {
         await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
@@ -801,7 +802,7 @@ async function openScreen(page, menuKey, options = {}) {
     const search = await S.resolve(page, "serviceSearch", { optional: true, timeout: 2500 });
     if (search) {
       tried.push("serviceSearch");
-      const term = menuKey === "tebligatMenu" ? "e-Tebligat" : "Adıma Düzenlenen";
+      const term = menuKey === "tebligatMenu" ? "e-Tebligat" : "e-Belge";
       await search.click();
       await search.fill(term);
       await sleep(1200);
@@ -1481,6 +1482,134 @@ async function loginComplete({ pendingId, code }) {
   }
 }
 
+/** Captcha görselini yenilemek için refresh butonuna veya görselin üzerine tıklar. */
+async function refreshCaptcha(page) {
+  try {
+    const refreshBtn = await page.$(
+      "button[title*='yenile' i], [aria-label*='yenile' i], .captcha-refresh, img[src*='refresh' i]"
+    );
+    if (refreshBtn) {
+      await refreshBtn.click().catch(() => {});
+      return;
+    }
+    const img = await S.resolve(page, "captchaImage", { optional: true, timeout: 1500 });
+    if (img) {
+      await img.click().catch(() => {});
+    }
+  } catch (_) {}
+}
+
+/**
+ * OTOMATİK GİRİŞ (Auto-Login with Local OCR):
+ * GİB giriş ekranını açar, kullanıcı adı ve şifreyi doldurur.
+ * Captcha görselini yerel OCR (captcha-solver.js) ile okur, kod alanına yazar ve giriş yapar.
+ * Hatalı kod durumunda görseli yenileyip en fazla 4 kez tekrar dener.
+ * Başarılı olursa storageState ve __sessionStorage'ı kaydeder.
+ *
+ * @returns {Promise<{ok:boolean, message:string, method?:string, diagnostic?:string}>}
+ */
+async function autoLogin({ username, password, sessionKey }) {
+  if (!username || !password) {
+    return { ok: false, message: "GİB kullanıcı kodu ve şifresi zorunludur.", items: [] };
+  }
+
+  const storageKey = sessionKey || username;
+  console.log(`[auto-login] Otomatik giriş başlatılıyor — anahtar:${storageKey}`);
+
+  const { browser, context } = await openContext(null, { allowImages: true });
+  try {
+    const page = await context.newPage();
+    await page.goto(S.URLS.login, { waitUntil: "commit", timeout: LOGIN_NAVIGATION_TIMEOUT_MS });
+
+    const userField = await S.resolve(page, "loginUsername", { timeout: LOGIN_FIELD_TIMEOUT_MS });
+    const passField = await S.resolve(page, "loginPassword", { timeout: LOGIN_FIELD_TIMEOUT_MS });
+    await userField.fill(String(username));
+    await passField.fill(String(password));
+
+    const MAX_OCR_ATTEMPTS = 4;
+    for (let attempt = 1; attempt <= MAX_OCR_ATTEMPTS; attempt++) {
+      console.log(`[auto-login] Captcha denemesi ${attempt}/${MAX_OCR_ATTEMPTS}`);
+
+      // Captcha locator'ını al
+      const captchaLocator = await S.resolve(page, "captchaImage", { timeout: LOGIN_CAPTCHA_TIMEOUT_MS });
+      const rawBuffer = await captchaLocator.screenshot({ type: "png" });
+
+      // Yerel OCR / Preprocessed Canvas ile çöz
+      const solution = await captchaSolver.solveCaptcha(rawBuffer, page);
+      console.log(
+        `[auto-login] Captcha çözüm sonucu (${solution?.method || "yok"}): ${solution?.code || "okunamadı"}`
+      );
+
+      if (!solution || !solution.code || solution.code.length < 4) {
+        console.warn("[auto-login] Captcha okunamadı, görsel yenileniyor...");
+        await refreshCaptcha(page);
+        await polite();
+        continue;
+      }
+
+      const captchaField = await S.resolve(page, "captchaInput", { timeout: LOGIN_FIELD_TIMEOUT_MS });
+      await captchaField.fill("");
+      await captchaField.fill(solution.code.trim());
+      await polite();
+
+      const submit = await S.resolve(page, "loginSubmit", { timeout: LOGIN_SUBMIT_TIMEOUT_MS });
+      await Promise.all([
+        page.waitForLoadState("domcontentloaded", { timeout: LOGIN_SUBMIT_TIMEOUT_MS }).catch(() => {}),
+        submit.click(),
+      ]);
+      await polite();
+
+      if (await isLoggedIn(page)) {
+        try {
+          const state = await context.storageState();
+          state.__sessionStorage = await captureSessionStorage(page);
+          session.saveState(storageKey, state);
+          console.log(`[auto-login] Giriş BAŞARILI, oturum kaydedildi (${solution.method} ile çözüldü).`);
+        } catch (saveErr) {
+          console.warn("[auto-login] Oturum durumu kaydedilemedi:", saveErr.message);
+        }
+        await closeQuietly(browser);
+        return {
+          ok: true,
+          message: `Otomatik giriş başarılı (${solution.method} OCR ile çözüldü). Oturum kaydedildi.`,
+          method: solution.method,
+        };
+      }
+
+      // Başarısız: Hata nedenini kontrol et
+      const errorBox = await S.resolve(page, "loginError", { optional: true, timeout: 1500 });
+      let reason = "";
+      if (errorBox) {
+        reason = (await errorBox.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+        console.warn(`[auto-login] Giriş başarısız, portal mesajı: ${reason}`);
+      }
+
+      // Kullanıcı adı / şifre silindiyse tekrar doldur
+      try {
+        const u = await S.resolve(page, "loginUsername", { optional: true, timeout: 1500 });
+        const p = await S.resolve(page, "loginPassword", { optional: true, timeout: 1500 });
+        if (u && !(await u.inputValue().catch(() => ""))) await u.fill(String(username));
+        if (p && !(await p.inputValue().catch(() => ""))) await p.fill(String(password));
+      } catch (_) {}
+
+      // Görseli yenile
+      await refreshCaptcha(page);
+      await polite();
+    }
+
+    await closeQuietly(browser);
+    return {
+      ok: false,
+      requiresManual: true,
+      needsCaptchaLogin: true,
+      message: `Otomatik OCR girişi ${MAX_OCR_ATTEMPTS} denemede doğrulanamadı. Lütfen manuel giriş yapın.`,
+    };
+  } catch (err) {
+    await closeQuietly(browser);
+    return toErrorResponse(err);
+  }
+}
+
 // ---------------------------------------------------------------- oturum heartbeat (keepalive)
 
 /**
@@ -1943,10 +2072,19 @@ async function runFlow(username, password, work, options = {}) {
 
   return session
     .withClientLock(identity, async () => {
-      const cached = session.loadState(identity);
+      let cached = session.loadState(identity);
       if (!cached) {
-        // Kayıtlı oturum yok → kullanıcı doğrulama kodunu girmeli (tarayıcı açılmaz).
-        throw captchaLoginRequiredError();
+        if (username && password) {
+          console.log(`[runFlow] Kayıtlı oturum yok; otomatik OCR girişi deneniyor — kimlik:${identity}`);
+          const loginRes = await autoLogin({ username, password, sessionKey });
+          if (loginRes.ok) {
+            cached = session.loadState(identity);
+          }
+        }
+        if (!cached) {
+          // Otomatik giriş yapılamadı/şifre yok → kullanıcı doğrulama kodunu girmeli.
+          throw captchaLoginRequiredError();
+        }
       }
 
       /** Tek deneme: tarayıcı aç → oturum doğrula → (mükellef seç) → iş → kapat. */
@@ -1978,9 +2116,17 @@ async function runFlow(username, password, work, options = {}) {
         try {
           return await attemptOnce(cached);
         } catch (err) {
-          // Kayıtlı oturum geçersizse "expired" işaretlenir (silinmez — panel
-          // "yenilenmeli" gösterebilsin); bir sonraki /login-begin taze başlar.
-          // Hata olduğu gibi yükselir (needsCaptchaLogin yanıtına eşlenir).
+          // Oturum düşmüşse ve kullanıcı adı/şifre varsa bir kez otomatik OCR ile tazelemeyi dene
+          if (err && err.needsCaptchaLogin && username && password) {
+            console.log(`[runFlow] Oturum düşmüş; otomatik OCR girişiyle yenileniyor — kimlik:${identity}`);
+            const loginRes = await autoLogin({ username, password, sessionKey });
+            if (loginRes.ok) {
+              const freshState = session.loadState(identity);
+              if (freshState) {
+                return await attemptOnce(freshState);
+              }
+            }
+          }
           if (err && err.needsCaptchaLogin) session.markExpired(identity);
           throw err;
         }
@@ -2061,6 +2207,7 @@ module.exports = {
   loginTest,
   loginBegin,
   loginComplete,
+  autoLogin,
   fetchDocuments,
   fetchTebligat,
   fetchAdvisorClients,

@@ -13,9 +13,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 # Bağımlılıklar önce kurulur (katman önbelleği).
-COPY package.json package-lock.json* ./
-# Lockfile varsa yeniden üretilebilir kurulum (npm ci); yoksa npm install'a düşülür.
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
+COPY package.json ./
+RUN npm install --omit=dev
 
 COPY . .
 

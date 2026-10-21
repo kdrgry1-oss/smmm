@@ -24,22 +24,19 @@ namespace MaliMusavir.Api.Infrastructure;
 /// </summary>
 public class DailyPortalSyncWorker : BackgroundService
 {
-    /// <summary>Günlük çalışma saati (Türkiye saati).</summary>
-    public static readonly TimeSpan RunAt = TimeSpan.FromHours(3);
-
     private static readonly TimeZoneInfo TurkeyTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul");
 
-    /// <summary>Her gece taranan geriye dönük aralık (geç düşen belgeler yakalanır).</summary>
+    /// <summary>Her turda taranan geriye dönük aralık (geç düşen belgeler yakalanır).</summary>
     public const int LookbackDays = 7;
 
-    /// <summary>Zamanı kaçırmamak için dakikada bir kontrol edilir (Task.Delay kayması güvenli).</summary>
+    /// <summary>Zamanı kaçırmamak için dakikada bir kontrol edilir.</summary>
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DailyPortalSyncWorker> _logger;
 
-    /// <summary>Aynı günde ikinci kez tetiklenmeyi engeller.</summary>
-    private DateOnly? _lastRunDate;
+    /// <summary>Aynı saat diliminde ikinci kez tetiklenmeyi engeller.</summary>
+    private DateTime? _lastRunHour;
 
     public DailyPortalSyncWorker(IServiceScopeFactory scopeFactory, ILogger<DailyPortalSyncWorker> logger)
     {
@@ -50,24 +47,23 @@ public class DailyPortalSyncWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "GİB portal günlük senkron tetikleyicisi başladı (her gün {Hour:00}:{Minute:00}, son {Days} gün).",
-            RunAt.Hours, RunAt.Minutes, LookbackDays);
+            "GİB portal saatlik senkron tetikleyicisi başladı (her saat başı tüm mükellefler taranır, son {Days} gün).",
+            LookbackDays);
 
-        // Uygulama 03:00'ten sonra açılmış olabilir. O günün taramasını atlamak yerine
-        // ilk turda bir kez kuyruğa al; _lastRunDate aynı süreçte ikinci çalışmayı engeller.
+        var isFirstRun = true;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                // Docker varsayılanı UTC'dir; iş saati kullanıcıya gösterilen Türkiye
-                // saatine göre hesaplanmalıdır.
                 var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TurkeyTimeZone);
-                var today = DateOnly.FromDateTime(localNow);
+                var currentHour = new DateTime(localNow.Year, localNow.Month, localNow.Day, localNow.Hour, 0, 0);
 
-                if (localNow.TimeOfDay >= RunAt && _lastRunDate != today)
+                if (isFirstRun || _lastRunHour != currentHour)
                 {
-                    _lastRunDate = today;
+                    isFirstRun = false;
+                    _lastRunHour = currentHour;
+                    _logger.LogInformation("GİB portal saatlik tarama döngüsü başladı: {Time:yyyy-MM-dd HH:00}", currentHour);
                     await EnqueueAllAsync(stoppingToken);
                 }
             }
@@ -77,8 +73,7 @@ public class DailyPortalSyncWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                // Tur hatası döngüyü ÖLDÜRMEZ; yarın tekrar denenir.
-                _logger.LogError(ex, "GİB portal günlük tetikleme turu hata verdi.");
+                _logger.LogError(ex, "GİB portal saatlik tetikleme turu hata verdi.");
             }
 
             try
@@ -91,7 +86,7 @@ public class DailyPortalSyncWorker : BackgroundService
             }
         }
 
-        _logger.LogInformation("GİB portal günlük senkron tetikleyicisi durdu.");
+        _logger.LogInformation("GİB portal saatlik senkron tetikleyicisi durdu.");
     }
 
     /// <summary>
@@ -152,9 +147,9 @@ public class DailyPortalSyncWorker : BackgroundService
                 .Select(g => g.First())
                 .ToList();
 
-            // Fatura hedefleri: entegrasyon kaydı OLAN tüm aktif mükellefler (Mock hariç).
-            // EInvoiceSyncService sağlayıcıyı mükellefin kendi kaydından seçer.
-            invoiceTargets = (await db.ClientIntegrations
+            // Fatura hedefleri: entegrasyon kaydı OLAN tüm aktif mükellefler (Mock hariç) + müşavir GİB mükellefleri.
+            // EInvoiceSyncService sağlayıcıyı mükellefin kendi kaydından veya müşavir GİB oturumundan seçer.
+            var integrationInvoiceTargets = (await db.ClientIntegrations
                     .IgnoreQueryFilters()
                     .AsNoTracking()
                     .Where(ci => ci.Provider != IntegrationProvider.Mock)
@@ -164,7 +159,10 @@ public class DailyPortalSyncWorker : BackgroundService
                         c => c.Id,
                         (ci, c) => new { c.Id, c.TenantId })
                     .ToListAsync(ct))
-                .Select(x => (x.Id, x.TenantId))
+                .Select(x => (x.Id, x.TenantId));
+
+            invoiceTargets = integrationInvoiceTargets
+                .Concat(byAdvisor)
                 .GroupBy(t => t.Item1)
                 .Select(g => g.First())
                 .ToList();

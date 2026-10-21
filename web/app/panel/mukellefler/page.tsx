@@ -812,15 +812,14 @@ export default function ClientsPage() {
                           ⚠ Elle doğrulama gerekli
                         </span>
                         <span className="mb-1 block max-w-[240px] text-xs text-amber-700">
-                          GİB oturumu yenilenmeli; otomatik çekim durdu. Doğrulama kodunu girerek
-                          oturumu tek tıkla açabilirsiniz.
+                          GİB oturumu yenilenmeli. Tek tıkla otomatik (OCR) giriş yapabilirsiniz.
                         </span>
                         <button
                           onClick={() => setGibLoginClient(client)}
                           className="mb-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700"
-                          title="GİB giriş ekranındaki doğrulama kodunu girin — oturum 12 saat saklanır."
+                          title="Doğrulama kodunu otomatik (OCR) çözerek oturumu tek tıkla açar."
                         >
-                          GİB Oturumu Aç
+                          GİB Oturumu Aç (Otomatik)
                         </button>
                       </>
                     )}
