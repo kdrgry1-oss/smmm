@@ -1461,6 +1461,9 @@ export interface ETebligatItem {
   /** Kalan süre ≤ 3 gün (süresi geçmişler dahil). */
   isUrgent: boolean;
   createdAt: string;
+  hasDocument?: boolean;
+  documentFileName?: string | null;
+  documentContent?: string | null;
 }
 
 export interface ETebligatList {
@@ -1507,6 +1510,22 @@ export function syncETebligat(clientId?: string, from?: string, to?: string) {
 
 export function markETebligatRead(id: string) {
   return api<ETebligatItem>(`/api/etebligat/${id}/mark-read`, { method: "POST" });
+}
+
+export function getETebligatDocumentUrl(id: string): string {
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/api/etebligat/${id}/document`;
+  }
+  const base = process.env.NEXT_PUBLIC_API_URL || "";
+  return `${base.replace(/\/api-proxy\/?$/, "")}/api/etebligat/${id}/document`;
+}
+
+export function getETebligatDownloadUrl(id: string): string {
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/api/etebligat/${id}/download`;
+  }
+  const base = process.env.NEXT_PUBLIC_API_URL || "";
+  return `${base.replace(/\/api-proxy\/?$/, "")}/api/etebligat/${id}/download`;
 }
 
 // ---------- Faz 5: Abonelik / Ödeme ----------

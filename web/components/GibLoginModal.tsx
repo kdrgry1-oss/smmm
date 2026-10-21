@@ -51,6 +51,7 @@ export default function GibLoginModal({
 }: GibLoginModalProps) {
   // begin durumu
   const [loading, setLoading] = useState(true);
+  const [loadingStep, setLoadingStep] = useState(0);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [captchaImage, setCaptchaImage] = useState<string | null>(null);
   const [expiresInSeconds, setExpiresInSeconds] = useState<number | null>(null);
@@ -125,6 +126,18 @@ export default function GibLoginModal({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Adım geçiş animasyonu: kullanıcıya robotun aktif çalıştığını gösterir
+  useEffect(() => {
+    if (!loading) {
+      setLoadingStep(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setLoadingStep((prev) => (prev < 3 ? prev + 1 : prev));
+    }, 1800);
+    return () => clearInterval(timer);
+  }, [loading]);
 
   // Captcha görseli gelince kod alanına odaklan (autofocus).
   useEffect(() => {
@@ -218,11 +231,43 @@ export default function GibLoginModal({
             ✓ {success}
           </div>
         ) : loading ? (
-          <div className="mt-6 flex flex-col items-center gap-3 py-8">
-            <span className="h-8 w-8 animate-spin rounded-full border-4 border-navy-200 border-t-navy-600" />
-            <p className="text-sm text-navy-500">
-              GİB giriş ekranı açılıyor, güvenlik kodu otomatik çözülüyor (OCR)...
-            </p>
+          <div className="mt-6 flex flex-col items-center gap-4 py-8 text-center">
+            <div className="relative flex items-center justify-center">
+              <span className="h-12 w-12 animate-spin rounded-full border-4 border-navy-100 border-t-navy-800" />
+              <span className="absolute text-[10px] font-black text-navy-800 tracking-tighter">
+                GİB
+              </span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-navy-900 transition-all">
+                {
+                  [
+                    "GİB Dijital Vergi Dairesi portalına bağlanılıyor...",
+                    "GİB giriş ekranı açıldı, kimlik bilgileri hazırlanıyor...",
+                    "Güvenlik kodu (CAPTCHA) yapay zeka ile otomatik çözülüyor...",
+                    "Oturum ve erişim yetkileri doğrulanıyor...",
+                  ][loadingStep]
+                }
+              </p>
+              <p className="text-xs text-navy-500">
+                Robot otomatik giriş yapıyor. Kod çözülürse bu pencere kendiliğinden kapanacaktır.
+              </p>
+            </div>
+            {/* 4 Aşamalı İlerleme Çubuğu */}
+            <div className="flex items-center gap-1.5 mt-2">
+              {[0, 1, 2, 3].map((s) => (
+                <div
+                  key={s}
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    s === loadingStep
+                      ? "w-10 bg-navy-800"
+                      : s < loadingStep
+                        ? "w-8 bg-navy-600"
+                        : "w-6 bg-navy-200"
+                  }`}
+                />
+              ))}
+            </div>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="mt-5 space-y-4" noValidate>

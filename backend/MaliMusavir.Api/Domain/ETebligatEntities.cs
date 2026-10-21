@@ -27,4 +27,11 @@ public class ETebligatMessage
     public bool IsRead { get; set; }
     public DateTime? ReadAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>İndirilen resmi belgenin dosya yolu (storage köküne göre göreli).</summary>
+    public string? DocumentPath { get; set; }
+    /// <summary>Resmi belgenin orijinal dosya adı (ör. "Tebligat_ODEMEEMRI.pdf").</summary>
+    public string? DocumentFileName { get; set; }
+    /// <summary>Belge içeriği veya üst yazı metni / JSON (varsa).</summary>
+    public string? DocumentContent { get; set; }
 }

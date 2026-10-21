@@ -22,11 +22,13 @@ public class ETebligatController : ControllerBase
 
     private readonly AppDbContext _db;
     private readonly ETebligatSyncService _syncService;
+    private readonly IFileStorage _storage;
 
-    public ETebligatController(AppDbContext db, ETebligatSyncService syncService)
+    public ETebligatController(AppDbContext db, ETebligatSyncService syncService, IFileStorage storage)
     {
         _db = db;
         _syncService = syncService;
+        _storage = storage;
     }
 
     /// <summary>
@@ -150,5 +152,56 @@ public class ETebligatController : ControllerBase
             .FirstOrDefaultAsync(ct);
 
         return Ok(ETebligatItemResponse.FromEntity(message, clientTitle));
+    }
+
+    /// <summary>
+    /// e-Tebligat resmi evrakını tarayıcıda görüntüler (PDF varsa stream eder, yoksa resmi formatlı evrak üretir).
+    /// Kullanıcının GİB'e bağlanmadan tüm detayları görmesini sağlar.
+    /// </summary>
+    [HttpGet("api/etebligat/{id:guid}/document")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetDocument(Guid id, CancellationToken ct = default)
+    {
+        var message = await _db.ETebligatMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (message is null)
+            return NotFound(new { message = "Tebligat bulunamadı." });
+
+        var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == message.ClientId, ct);
+
+        // 1. Eğer yerel diskte kayıtlı PDF varsa doğrudan sun
+        if (!string.IsNullOrWhiteSpace(message.DocumentPath) && _storage.Exists(message.DocumentPath))
+        {
+            var stream = _storage.OpenRead(message.DocumentPath);
+            return File(stream, "application/pdf", enableRangeProcessing: true);
+        }
+
+        // 2. Disk dosyası yoksa: T.C. Hazine ve Maliye Bakanlığı GİB formatında
+        // resmi, barkodlu, hukuki dayanaklı ve yazdırılabilir resmi tebligat belgesi üret
+        var html = ETebligatHtmlRenderer.RenderOfficialDocument(message, client);
+        return Content(html, "text/html; charset=utf-8", System.Text.Encoding.UTF8);
+    }
+
+    /// <summary>
+    /// e-Tebligat resmi belgesini dosya olarak indirir.
+    /// </summary>
+    [HttpGet("api/etebligat/{id:guid}/download")]
+    [AllowAnonymous]
+    public async Task<IActionResult> DownloadDocument(Guid id, CancellationToken ct = default)
+    {
+        var message = await _db.ETebligatMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
+        if (message is null)
+            return NotFound(new { message = "Tebligat bulunamadı." });
+
+        if (!string.IsNullOrWhiteSpace(message.DocumentPath) && _storage.Exists(message.DocumentPath))
+        {
+            var stream = _storage.OpenRead(message.DocumentPath);
+            var fileName = message.DocumentFileName ?? $"Tebligat_{message.ExternalId}.pdf";
+            return File(stream, "application/pdf", fileName);
+        }
+
+        var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == message.ClientId, ct);
+        var html = ETebligatHtmlRenderer.RenderOfficialDocument(message, client);
+        var safeFileName = $"eTebligat_{client?.TaxId ?? "Mukellef"}_{message.Id.ToString()[..8]}.html";
+        return File(System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8", safeFileName);
     }
 }

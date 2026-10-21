@@ -1321,6 +1321,9 @@ public class ETebligatItemResponse
     /// <summary>Kalan süre ≤ 3 gün (süresi geçmişler dahil) — kırmızı sayaç.</summary>
     public bool IsUrgent { get; set; }
     public DateTime CreatedAt { get; set; }
+    public bool HasDocument { get; set; }
+    public string? DocumentFileName { get; set; }
+    public string? DocumentContent { get; set; }
 
     public static ETebligatItemResponse FromEntity(ETebligatMessage m, string? clientTitle)
     {
@@ -1343,7 +1346,10 @@ public class ETebligatItemResponse
             ReadAt = m.ReadAt,
             DaysRemaining = daysRemaining,
             IsUrgent = daysRemaining is not null && daysRemaining <= 3,
-            CreatedAt = m.CreatedAt
+            CreatedAt = m.CreatedAt,
+            HasDocument = !string.IsNullOrWhiteSpace(m.DocumentPath) || !string.IsNullOrWhiteSpace(m.DocumentContent),
+            DocumentFileName = m.DocumentFileName,
+            DocumentContent = m.DocumentContent
         };
     }
 }

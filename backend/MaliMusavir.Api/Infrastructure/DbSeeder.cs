@@ -13,6 +13,19 @@ public static class DbSeeder
         // Faz 0'da migration yok; şema doğrudan modelden oluşturulur.
         await db.Database.EnsureCreatedAsync();
 
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""ETebligatMessages"" ADD COLUMN IF NOT EXISTS ""DocumentPath"" text;
+                ALTER TABLE ""ETebligatMessages"" ADD COLUMN IF NOT EXISTS ""DocumentFileName"" text;
+                ALTER TABLE ""ETebligatMessages"" ADD COLUMN IF NOT EXISTS ""DocumentContent"" text;
+            ");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "ETebligatMessages sütun güncellemesi atlandı.");
+        }
+
         await SeedPlansAsync(db, logger);
         await SeedSuperAdminAsync(db, configuration, logger);
         await SeedTaxParametersAsync(db, logger);
