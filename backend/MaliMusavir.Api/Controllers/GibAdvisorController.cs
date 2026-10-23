@@ -111,7 +111,8 @@ public class GibAdvisorController : ControllerBase
     /// saklanır — tüm mükellef çekimleri bu TEK oturumu kullanır.
     /// </summary>
     [HttpPost("login/begin")]
-    public async Task<ActionResult<GibLoginBeginResponse>> LoginBegin(CancellationToken ct)
+    public async Task<ActionResult<GibLoginBeginResponse>> LoginBegin(
+        [FromQuery] bool manual = false, CancellationToken ct = default)
     {
         if (TenantId is null)
             return BadRequest(new { message = "Bu işlem için bir büro (tenant) hesabıyla giriş yapın." });
@@ -141,6 +142,7 @@ public class GibAdvisorController : ControllerBase
         var sessionKey = GibRobotClient.AdvisorSessionKey(TenantId.Value);
 
         // 1. ÖNCE OTOMATİK GİRİŞ DENE (Yerel OCR ile Captcha Çözümü):
+        if (!manual)
         try
         {
             var autoResult = await _gibRobot.AutoAdvisorLoginAsync(credential.Username, password, sessionKey, ct);

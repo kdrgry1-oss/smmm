@@ -90,7 +90,7 @@ export default function GibLoginModal({
     setAttemptsLeft(null);
     try {
       const result =
-        mode === "advisor" ? await beginGibAdvisorLogin() : await beginGibLogin(clientId!, manual);
+        mode === "advisor" ? await beginGibAdvisorLogin(manual) : await beginGibLogin(clientId!, manual);
       if (result.alreadyLoggedIn) {
         // Giriş yapıldı (kayıtlı oturum veya OCR ile otomatik çözüldü)
         finishWithSuccess(
@@ -339,7 +339,7 @@ export default function GibLoginModal({
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => startLogin()}
+                onClick={() => startLogin(true)}
                 disabled={submitting}
                 title="Yeni bir doğrulama kodu görseli getirir (girişe baştan başlar)."
               >

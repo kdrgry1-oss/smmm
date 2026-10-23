@@ -446,6 +446,12 @@ public class OutboundJobService
                 ? "GİB portal uyarısı temizlendi. ClientId: {ClientId}"
                 : "GİB portal entegrasyonuna elle doğrulama uyarısı yazıldı. ClientId: {ClientId}",
             integration.ClientId);
+
+        if (normalized is not null)
+        {
+            MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.Enqueue(
+                MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.Hash(username));
+        }
     }
 
     private static T? Deserialize<T>(string json) where T : class

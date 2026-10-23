@@ -436,10 +436,13 @@ export async function beginGibLogin(clientId: string, manual = false): Promise<G
   for (let attempt=0; attempt<180; attempt++) {
     const result = await api<{status:string; message?:string}>(`/api/clients/${clientId}/integration/gib-login/auto-status/${jobId}`);
     if (result.status === "Basarili") return {success:true, alreadyLoggedIn:true, message:"GİB oturumu doğrulandı ve tebligat taraması tamamlandı.", pendingId:null,captchaImage:null,expiresInSeconds:null};
-    if (result.status === "Basarisiz" || result.status === "Iptal") throw new Error(result.message || "Otomatik giriş tamamlanamadı. Doğrulama ekranını doğrudan açabilirsiniz.");
+    if (result.status === "Basarisiz" || result.status === "Iptal") {
+      // Otomatik giriş çözemezse kullanıcıyı görsel olmadan boş bırakma; hemen manuel captcha ekranını getir:
+      return api<GibLoginBeginResult>(`/api/clients/${clientId}/integration/gib-login/begin?manual=true`, {method:"POST"});
+    }
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
-  throw new Error("İşlem arka planda devam ediyor. Durumunu Gönderim Kuyruğu ekranından izleyebilirsiniz.");
+  return api<GibLoginBeginResult>(`/api/clients/${clientId}/integration/gib-login/begin?manual=true`, {method:"POST"});
 }
 
 /** Kullanıcının okuduğu doğrulama koduyla GİB girişini tamamlar (oturum 12 saat saklanır). */
@@ -477,8 +480,8 @@ export function saveGibAdvisorCredentials(username: string, password: string) {
 }
 
 /** Müşavir GİB girişini başlatır (kayıtlı müşavir kimliğiyle; captcha görseli döner). */
-export function beginGibAdvisorLogin() {
-  return api<GibLoginBeginResult>("/api/gib-advisor/login/begin", { method: "POST" });
+export function beginGibAdvisorLogin(manual = false) {
+  return api<GibLoginBeginResult>(`/api/gib-advisor/login/begin${manual ? "?manual=true" : ""}`, { method: "POST" });
 }
 
 /** Müşavir GİB girişini tamamlar; oturum advisor anahtarıyla saklanır (tüm mükellefler için). */

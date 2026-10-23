@@ -87,59 +87,71 @@ async function preprocessCaptchaInPage(page, selector = "img[src*='captcha' i], 
 
 /**
  * Gemini Flash API'si ile Captcha çözümü (Yüksek doğruluklu mekanizma).
- * Ortamda GEMINI_API_KEY varsa kullanılır.
+ * Ortamda GEMINI_API_KEY varsa kullanılır (deploy/.env içinde tanımlanır).
  */
 async function solveWithGemini(imageBuffer) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  try {
-    const base64 = imageBuffer.toString("base64");
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const models = [
+    process.env.GEMINI_MODEL,
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-flash-latest",
+  ].filter(Boolean);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+  const base64 = imageBuffer.toString("base64");
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: "Read the security verification code / CAPTCHA from this image. Output ONLY the exact characters (lowercase/uppercase letters and numbers), with no spaces, punctuation, or explanation.",
-              },
-              {
-                inline_data: {
-                  mime_type: "image/png",
-                  data: base64,
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: "Read the security verification code / CAPTCHA from this image. Output ONLY the exact characters (lowercase/uppercase letters and numbers), with no spaces, punctuation, or explanation.",
                 },
-              },
-            ],
+                {
+                  inline_data: {
+                    mime_type: "image/png",
+                    data: base64,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.0,
+            maxOutputTokens: 64,
           },
-        ],
-        generationConfig: {
-          temperature: 0.0,
-          maxOutputTokens: 1024,
-        },
-      }),
-    });
-    clearTimeout(timeout);
+        }),
+      });
+      clearTimeout(timeout);
 
-    if (res.ok) {
-      const data = await res.json();
-      const text =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-      const cleaned = text.replace(/[^A-Za-z0-9]/g, "").trim();
-      if (cleaned.length >= 4 && cleaned.length <= 7) {
-        return { code: cleaned, method: "gemini" };
+      if (res.ok) {
+        const data = await res.json();
+        const text =
+          data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        const cleaned = text.replace(/[^A-Za-z0-9]/g, "").trim();
+        if (cleaned.length >= 4 && cleaned.length <= 7) {
+          return { code: cleaned, method: `gemini (${model})` };
+        }
+      } else {
+        const errBody = await res.text().catch(() => "");
+        console.warn(`[solveWithGemini] Model ${model} HTTP ${res.status}: ${errBody.slice(0, 120)}`);
       }
+    } catch (err) {
+      console.warn(`[solveWithGemini] Model ${model} hata:`, err && err.message);
     }
-  } catch (err) {
-    console.warn("[solveWithGemini] Hata:", err && err.message);
   }
   return null;
 }

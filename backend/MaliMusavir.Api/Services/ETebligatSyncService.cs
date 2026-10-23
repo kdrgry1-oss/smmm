@@ -271,6 +271,11 @@ public class ETebligatSyncService
             normalized is null
                 ? "GİB portal uyarısı temizlendi. ClientId: {ClientId}"
                 : "GİB portal entegrasyonuna oturum yenileme uyarısı yazıldı. ClientId: {ClientId}", clientId);
+
+        if (normalized is not null)
+        {
+            GibSessionRenewalWorker.Enqueue(GibSessionRenewalWorker.Hash(username));
+        }
     }
 
     /// <summary>

@@ -43,7 +43,7 @@ const ACTION_TIMEOUT_MS = Number(process.env.ACTION_TIMEOUT_MS || 20000);
 /** Elle giriş akışında kullanıcıyı bekletmemek için kısa, kesin üst sınırlar. */
 const LOGIN_NAVIGATION_TIMEOUT_MS = Number(process.env.LOGIN_NAVIGATION_TIMEOUT_MS || 10000);
 const LOGIN_FIELD_TIMEOUT_MS = Number(process.env.LOGIN_FIELD_TIMEOUT_MS || 6000);
-const LOGIN_CAPTCHA_TIMEOUT_MS = Number(process.env.LOGIN_CAPTCHA_TIMEOUT_MS || 5000);
+const LOGIN_CAPTCHA_TIMEOUT_MS = Number(process.env.LOGIN_CAPTCHA_TIMEOUT_MS || 10000);
 const LOGIN_SUBMIT_TIMEOUT_MS = Number(process.env.LOGIN_SUBMIT_TIMEOUT_MS || 6000);
 const SESSION_CHECK_TIMEOUT_MS = Number(process.env.SESSION_CHECK_TIMEOUT_MS || 8000);
 const FAST_SCREEN_NAVIGATION_TIMEOUT_MS = Number(process.env.FAST_SCREEN_NAVIGATION_TIMEOUT_MS || 8000);
@@ -718,18 +718,31 @@ async function assertNoManualStep(page, label) {
   throw err;
 }
 
-/** Oturum açık mı? (giriş göstergesi görünüyor ve giriş formu yok) */
+/** Oturum açık mı? (giriş göstergesi görünüyor veya sessionStorage'da token var) */
 async function isLoggedIn(page) {
-  // Public portal text is not proof of authentication. Wait for the SPA to
-  // finish sign-in and provide the token used by the authenticated APIs.
+  // 1. Gösterge varsa (Çıkış vb.) kesinlikle giriş yapılmıştır
+  if (await S.isPresent(page, "loggedInMarker", 1000)) return true;
+
+  // 2. sessionStorage'da token var mı?
+  let hasToken = false;
   try {
-    await page.waitForFunction(() => {
+    hasToken = await page.waitForFunction(() => {
       const token = window.sessionStorage.getItem("token");
       return typeof token === "string" && token.trim().length > 0;
-    }, null, { timeout: 10000 });
-  } catch { return false; }
-  const loginForm = await S.isPresent(page, "loginPassword", 1000);
-  return !loginForm;
+    }, null, { timeout: 3500 }).then(() => true).catch(() => false);
+  } catch {
+    hasToken = false;
+  }
+
+  if (hasToken) {
+    // Token varsa: sayfada aktif bir loginError kutusu yoksa oturum açılmıştır
+    const hasError = await S.isPresent(page, "loginError", 500);
+    if (!hasError) return true;
+  }
+
+  // 3. Gösterge yoksa: giriş formu yoksa ve URL login değilse
+  const loginForm = await S.isPresent(page, "loginPassword", 800);
+  return !loginForm && !page.url().toLowerCase().includes("login");
 }
 
 /**
@@ -1567,13 +1580,23 @@ async function autoLogin({ username, password, sessionKey }) {
       await polite();
 
       const submit = await S.resolve(page, "loginSubmit", { timeout: LOGIN_SUBMIT_TIMEOUT_MS });
-      await Promise.all([
-        page.waitForLoadState("domcontentloaded", { timeout: LOGIN_SUBMIT_TIMEOUT_MS }).catch(() => {}),
-        submit.click(),
-      ]);
-      await polite();
+      await submit.click();
 
-      if (await isLoggedIn(page)) {
+      // Yanıtı bekle: oturum açılana kadar veya hata mesajı çıkana kadar aktif döngü (maks 8 sn)
+      let loginSuccess = false;
+      const startWait = Date.now();
+      while (Date.now() - startWait < 8000) {
+        if (await isLoggedIn(page)) {
+          loginSuccess = true;
+          break;
+        }
+        if (await S.isPresent(page, "loginError", 300)) {
+          break;
+        }
+        await sleep(300);
+      }
+
+      if (loginSuccess) {
         try {
           const state = await context.storageState();
           state.__sessionStorage = await captureSessionStorage(page);
@@ -2087,6 +2110,13 @@ async function runFlow(username, password, work, options = {}) {
   return session
     .withClientLock(identity, async () => {
       let cached = session.loadState(identity);
+      if (!cached && username && password) {
+        console.log(`[runFlow] Kayıtlı oturum yok, otomatik OCR girişi deneniyor — ${identity}`);
+        const autoRes = await flowBudget.bounded(() => autoLogin({ username, password, sessionKey }), REQUEST_TIMEOUT_MS).catch(() => null);
+        if (autoRes && autoRes.ok) {
+          cached = session.loadState(identity);
+        }
+      }
       if (!cached) throw captchaLoginRequiredError();
       if ([...pendingLogins.values()].some(e => e.storageKey === identity)) {
         const err = new Error("Bu hesapta doğrulama işlemi sürüyor."); err.busy = true; throw err;
@@ -2120,7 +2150,19 @@ async function runFlow(username, password, work, options = {}) {
       try {
         return await flowBudget.bounded(() => attemptOnce(cached), REQUEST_TIMEOUT_MS);
       } catch (err) {
-        if (err && err.needsCaptchaLogin) session.markExpired(identity);
+        if (err && err.needsCaptchaLogin) {
+          session.markExpired(identity);
+          if (username && password) {
+            console.log(`[runFlow] Oturum düşmüş, otomatik OCR ile yenilenip tekrar denenecek — ${identity}`);
+            const autoRes = await flowBudget.bounded(() => autoLogin({ username, password, sessionKey }), REQUEST_TIMEOUT_MS).catch(() => null);
+            if (autoRes && autoRes.ok) {
+              const fresh = session.loadState(identity);
+              if (fresh) {
+                return await flowBudget.bounded(() => attemptOnce(fresh), REQUEST_TIMEOUT_MS);
+              }
+            }
+          }
+        }
         throw err;
       }
     })
@@ -2176,7 +2218,6 @@ function toErrorResponse(err) {
 
 // All automatic renewal requests share one account lock and one in-flight result.
 const renewalFlights = new Map();
-const renewalFailures = new Map();
 function coordinatedAutoLogin(args) {
   const identity = args.sessionKey || args.username;
   const key = session.sessionKey(identity);
@@ -2191,14 +2232,7 @@ function coordinatedAutoLogin(args) {
       if (status.uncertain) return {ok:false, retryable:true, message:"GİB oturumunun durumu doğrulanamadı; daha sonra tekrar denenecek."};
       session.markExpired(identity);
     }
-    const last = renewalFailures.get(key);
-    if (last && Date.now()-last.at < 300000) return last.result;
-    const result = await flowBudget.bounded(() => autoLogin(args), 300000);
-    if (!result.ok) renewalFailures.set(key,{at:Date.now(),result});
-    else renewalFailures.delete(key);
-    // Expire failure-cache entries without retaining credentials or unbounded keys.
-    for(const [k,v] of renewalFailures) if(Date.now()-v.at>=300000) renewalFailures.delete(k);
-    return result;
+    return await flowBudget.bounded(() => autoLogin(args), 300000);
   }).catch(toErrorResponse).finally(()=>renewalFlights.delete(key));
   renewalFlights.set(key,task);
   return task;
