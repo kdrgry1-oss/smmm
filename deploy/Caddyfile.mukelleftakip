@@ -1,0 +1,42 @@
+# Production domain; select with CADDY_CONFIG=Caddyfile.mukelleftakip.
+(panel) {
+	encode gzip
+
+	# API istekleri backend'e
+	handle /api-proxy/* {
+		uri strip_prefix /api-proxy
+		reverse_proxy api:5000
+	}
+	handle /api/* {
+		reverse_proxy api:5000
+	}
+	handle /swagger* {
+		reverse_proxy api:5000
+	}
+
+	# Geri kalan her şey web'e
+	handle {
+		reverse_proxy web:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+{$SITE_ADDRESS} {
+	import panel
+}
+
+www.mukelleftakip.com.tr {
+	redir https://mukelleftakip.com.tr{uri} permanent
+}
+
+# DNS yayılması sırasında eski erişim adresi korunur.
+http://194.110.169.43 {
+	import panel
+}

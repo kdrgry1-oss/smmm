@@ -154,54 +154,39 @@ public class ETebligatController : ControllerBase
         return Ok(ETebligatItemResponse.FromEntity(message, clientTitle));
     }
 
-    /// <summary>
-    /// e-Tebligat resmi evrakını tarayıcıda görüntüler (PDF varsa stream eder, yoksa resmi formatlı evrak üretir).
-    /// Kullanıcının GİB'e bağlanmadan tüm detayları görmesini sağlar.
-    /// </summary>
     [HttpGet("api/etebligat/{id:guid}/document")]
-    [AllowAnonymous]
-    public async Task<IActionResult> GetDocument(Guid id, CancellationToken ct = default)
-    {
-        var message = await _db.ETebligatMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
-        if (message is null)
-            return NotFound(new { message = "Tebligat bulunamadı." });
-
-        var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == message.ClientId, ct);
-
-        // 1. Eğer yerel diskte kayıtlı PDF varsa doğrudan sun
-        if (!string.IsNullOrWhiteSpace(message.DocumentPath) && _storage.Exists(message.DocumentPath))
-        {
-            var stream = _storage.OpenRead(message.DocumentPath);
-            return File(stream, "application/pdf", enableRangeProcessing: true);
-        }
-
-        // 2. Disk dosyası yoksa: T.C. Hazine ve Maliye Bakanlığı GİB formatında
-        // resmi, barkodlu, hukuki dayanaklı ve yazdırılabilir resmi tebligat belgesi üret
-        var html = ETebligatHtmlRenderer.RenderOfficialDocument(message, client);
-        return Content(html, "text/html; charset=utf-8", System.Text.Encoding.UTF8);
-    }
-
-    /// <summary>
-    /// e-Tebligat resmi belgesini dosya olarak indirir.
-    /// </summary>
     [HttpGet("api/etebligat/{id:guid}/download")]
-    [AllowAnonymous]
-    public async Task<IActionResult> DownloadDocument(Guid id, CancellationToken ct = default)
+    public async Task<IActionResult> GetDocument(Guid id,
+        [FromServices] MaliMusavir.Api.Integrations.GibRobotClient robot,
+        [FromServices] ISecretProtector protector, CancellationToken ct = default)
     {
+        Response.Headers.CacheControl = "no-store";
         var message = await _db.ETebligatMessages.FirstOrDefaultAsync(m => m.Id == id, ct);
-        if (message is null)
-            return NotFound(new { message = "Tebligat bulunamadı." });
-
-        if (!string.IsNullOrWhiteSpace(message.DocumentPath) && _storage.Exists(message.DocumentPath))
+        if (message is null) return NotFound(new { message = "Tebligat bulunamadı." });
+        if (string.IsNullOrWhiteSpace(message.DocumentPath) || !_storage.Exists(message.DocumentPath))
         {
-            var stream = _storage.OpenRead(message.DocumentPath);
-            var fileName = message.DocumentFileName ?? $"Tebligat_{message.ExternalId}.pdf";
-            return File(stream, "application/pdf", fileName);
+            var client = await _db.Clients.FirstOrDefaultAsync(c => c.Id == message.ClientId, ct);
+            if (client is null) return NotFound();
+            var integration = await _db.ClientIntegrations.FirstOrDefaultAsync(c => c.ClientId == client.Id, ct);
+            string sessionKey;
+            if (integration?.Provider == MaliMusavir.Api.Domain.IntegrationProvider.GibPortal &&
+                !string.IsNullOrEmpty(integration.ApiKeyEncrypted) &&
+                MaliMusavir.Api.Integrations.GibPortalProvider.TryParseCredentials(protector.Unprotect(integration.ApiKeyEncrypted), out var username, out _))
+                sessionKey = username;
+            else
+                return Conflict(new { message = "Asıl PDF henüz alınmamış. Belgeyi görüntülemek için mükellefin kendi GİB bağlantısını kullanın; müşavir oturumundan PDF desteği henüz hazır değil." });
+            var prefix = $"GIBPORTAL-{client.TaxId}-";
+            if (!message.ExternalId.StartsWith(prefix, StringComparison.Ordinal)) return BadRequest(new { message = "Belge kaynağı doğrulanamadı." });
+            var result = await robot.GetTebligatDocumentAsync(sessionKey, message.ExternalId[prefix.Length..], ct);
+            if (!result.Ok || string.IsNullOrWhiteSpace(result.Base64)) return Conflict(new { message = result.Message ?? "Asıl PDF alınamadı.", renewClientId = result.NeedsSessionRenewal ? client.Id.ToString() : null });
+            var bytes = Convert.FromBase64String(result.Base64);
+            if (bytes.Length > 20 * 1024 * 1024 || bytes.Length < 5 || System.Text.Encoding.ASCII.GetString(bytes, 0, 5) != "%PDF-")
+                return BadRequest(new { message = "Geçerli PDF alınamadı." });
+            using var input = new MemoryStream(bytes);
+            message.DocumentFileName = $"Tebligat_{message.Id}.pdf";
+            message.DocumentPath = await _storage.SavePortalDocumentAsync(client.TenantId, message.DocumentFileName, input, false, ct);
+            await _db.SaveChangesAsync(ct);
         }
-
-        var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == message.ClientId, ct);
-        var html = ETebligatHtmlRenderer.RenderOfficialDocument(message, client);
-        var safeFileName = $"eTebligat_{client?.TaxId ?? "Mukellef"}_{message.Id.ToString()[..8]}.html";
-        return File(System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8", safeFileName);
+        return File(_storage.OpenRead(message.DocumentPath!), "application/pdf", enableRangeProcessing: true);
     }
 }

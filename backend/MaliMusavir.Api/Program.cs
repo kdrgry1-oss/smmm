@@ -75,7 +75,7 @@ builder.Services.AddScoped<IEInvoiceProvider, ParasutProvider>(); // Paraşüt R
 // Zaman aşımı robotun kendi 90 sn bütçesinden BÜYÜK tutulur (yanıt kaybolmasın).
 builder.Services.AddHttpClient(GibRobotClient.HttpClientName, client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(120);
+    client.Timeout = TimeSpan.FromSeconds(300);
 });
 builder.Services.AddScoped<GibRobotClient>();
 builder.Services.AddScoped<IEInvoiceProvider, GibPortalProvider>();
@@ -243,6 +243,7 @@ builder.Services.AddHostedService<OutboundJobWorker>();
 // GibPortal entegrasyonu olan TÜM mükellefler için son 7 günlük "GibPortalSync" işi
 // kuyruğa alınır. Mükellef kimliği bir kez girilir; sonrası tamamen otomatiktir.
 builder.Services.AddHostedService<DailyPortalSyncWorker>();
+builder.Services.AddHostedService<GibSessionRenewalWorker>();
 // E7 — SMMM ücret/tahsilat takibi.
 builder.Services.AddScoped<FeeService>();
 

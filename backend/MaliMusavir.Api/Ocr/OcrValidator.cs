@@ -63,12 +63,14 @@ public class LlmVatBreakdownRow
     public decimal? Rate { get; set; }
     public decimal? Net { get; set; }
     public decimal? Vat { get; set; }
+    public decimal? Gross { get; set; }
 }
 
 public class LlmReceiptItem
 {
     public string? Name { get; set; }
     public decimal? Amount { get; set; }
+    public decimal? VatRate { get; set; }
 }
 
 /// <summary>
@@ -149,7 +151,16 @@ public class OcrValidator
         // ---------- Çok oranlı KDV kırılımı (yeni) ----------
         // Model kırılım verdiyse (dizi dolu) tutar alanları KIRILIM TOPLAMLARINDAN türetilir ve
         // doğrulama oran bazlı yapılır. Kırılım yoksa eski tek oranlı akış birebir çalışır.
-        var breakdown = SanitizeBreakdown(raw.VatBreakdown);
+        var breakdown = SanitizeBreakdown(raw.VatBreakdown, warnings, ref penalties);
+        // Only derive groups from item totals when every item has a printed rate and
+        // the complete post-discount item sum independently agrees with the receipt.
+        if (raw.VatBreakdown is not { Count: > 0 } && raw.Items is { Count: > 0 } &&
+            raw.Items.All(i => i.Amount is >= 0 && i.VatRate.HasValue) && total.HasValue &&
+            Math.Abs(raw.Items.Sum(i => i.Amount!.Value) - total.Value) <= AmountTolerance)
+        {
+            breakdown = SanitizeBreakdown(raw.Items.GroupBy(i => i.VatRate)
+                .Select(g => new LlmVatBreakdownRow { Rate = g.Key, Gross = g.Sum(i => i.Amount!.Value) }).ToList(), warnings, ref penalties);
+        }
         var hasBreakdown = breakdown.Count > 0;
 
         if (hasBreakdown)
@@ -163,12 +174,18 @@ public class OcrValidator
             // Kırılım tek gerçek kaynak: toplam alanlar kırılımla hizalanır. Modelin ayrıca
             // verdiği netAmount/vatAmount kırılımdan sapıyorsa uyarı düşülür (ceza bir kez).
             if (net.HasValue && Math.Abs(net.Value - sumNet) > AmountTolerance)
-                warnings.Add($"Matrah alanı ({Tl(net.Value)}) KDV kırılımı toplamından ({Tl(sumNet)}) farklı — kırılım esas alındı.");
+            {
+                penalties++;
+                warnings.Add($"Matrah alanı ({Tl(net.Value)}) KDV kırılımı toplamından ({Tl(sumNet)}) farklı — belge üzerindeki toplam korundu.");
+            }
             if (vatAmount.HasValue && Math.Abs(vatAmount.Value - sumVat) > AmountTolerance)
-                warnings.Add($"KDV alanı ({Tl(vatAmount.Value)}) KDV kırılımı toplamından ({Tl(sumVat)}) farklı — kırılım esas alındı.");
+            {
+                penalties++;
+                warnings.Add($"KDV alanı ({Tl(vatAmount.Value)}) KDV kırılımı toplamından ({Tl(sumVat)}) farklı — belge üzerindeki toplam korundu.");
+            }
 
-            net = sumNet;
-            vatAmount = sumVat;
+            net ??= sumNet;
+            vatAmount ??= sumVat;
             total ??= Math.Round(sumNet + sumVat, 2);
 
             // Geriye uyumlu tekil oran: en yüksek (net+kdv) tutarlı kırılımın oranı.
@@ -184,11 +201,11 @@ public class OcrValidator
             }
 
             // Eksik matrah/KDV tamamlanır: toplam + oran biliniyorsa geriye doğru hesap.
-            if (total.HasValue && vatRate.HasValue && (!net.HasValue || !vatAmount.HasValue))
+            if (total.HasValue && vatRate.HasValue && Domain.ReceiptVatMath.SupportedRate(vatRate.Value) && (!net.HasValue || !vatAmount.HasValue))
             {
                 var computedNet = Math.Round(total.Value / (1 + vatRate.Value / 100m), 2);
                 net ??= computedNet;
-                vatAmount ??= Math.Round(total.Value - computedNet, 2);
+                vatAmount ??= Math.Round(total.Value - net.Value, 2);
             }
             else if (net.HasValue && vatAmount.HasValue && !total.HasValue)
             {
@@ -196,7 +213,7 @@ public class OcrValidator
             }
 
             // ---------- KDV oranı-tutarı çapraz kontrolü: vatAmount ≈ net × oran/100 ----------
-            if (net.HasValue && vatRate is > 0 && vatAmount.HasValue)
+            if (net.HasValue && vatRate is >= 0 && vatAmount.HasValue)
             {
                 var expectedVat = Math.Round(net.Value * vatRate.Value / 100m, 2);
                 if (Math.Abs(expectedVat - vatAmount.Value) > AmountTolerance)
@@ -209,17 +226,22 @@ public class OcrValidator
 
             // Geriye uyumluluk: tek oranlı okumadan TEK satırlık kırılım türetilir
             // (export ve onay ekranı hep kırılımdan okuyabilsin diye).
-            if (net is > 0 || vatAmount is > 0)
+            if (vatRate.HasValue && net.HasValue && vatAmount.HasValue && raw.VatBreakdown is not { Count: > 0 })
             {
                 breakdown.Add(new OcrVatBreakdownRow
                 {
-                    Rate = vatRate ?? 0m,
+                    Rate = vatRate.Value,
                     Net = net ?? 0m,
                     Vat = vatAmount ?? 0m
                 });
             }
         }
 
+        if (breakdown.Count == 0)
+        {
+            warnings.Add("KDV kırılımı okunamadı; bilinmeyen oran %0 olarak kabul edilmedi. Onaydan önce oranları girin.");
+            penalties++;
+        }
         // ---------- Matrah + KDV = Toplam (±0,05) ----------
         if (total.HasValue && net.HasValue && vatAmount.HasValue)
         {
@@ -238,6 +260,7 @@ public class OcrValidator
         if (discount is 0m) discount = null;
 
         var confidence = ComputeConfidence(raw.Confidence, penalties);
+        if (warnings.Count > 0) confidence = Math.Min(confidence, 0.80);
 
         var itemsSummary = string.Join(" ",
             (raw.Items ?? new List<LlmReceiptItem>())
@@ -278,7 +301,7 @@ public class OcrValidator
         var total = raw.TotalSales ?? raw.TotalAmount;
         var totalVat = raw.TotalVat ?? raw.VatAmount;
 
-        var breakdown = SanitizeBreakdown(raw.VatBreakdown);
+        var breakdown = SanitizeBreakdown(raw.VatBreakdown, warnings, ref penalties);
         decimal? net = null;
         decimal? vat = totalVat;
         decimal vatRate = 0m;
@@ -304,9 +327,9 @@ public class OcrValidator
         else if (total.HasValue && totalVat.HasValue)
         {
             net = Math.Round(total.Value - totalVat.Value, 2);
-            warnings.Add("Z raporunda KDV oran kırılımı okunamadı — tek satırlık kırılım toplamlardan türetildi, oranları kontrol edin.");
+            warnings.Add("Z raporunda KDV oran kırılımı okunamadı — oranları belge üzerinden tamamlayın.");
             penalties++;
-            breakdown.Add(new OcrVatBreakdownRow { Rate = 0m, Net = net.Value, Vat = totalVat.Value });
+            // Unknown Z-report rates must never become a fictitious zero-rate row.
         }
 
         // Σnet+Σvat ≈ toplam satış (±0,05).
@@ -334,6 +357,7 @@ public class OcrValidator
         }
 
         var confidence = ComputeConfidence(raw.Confidence, penalties);
+        if (warnings.Count > 0) confidence = Math.Min(confidence, 0.80);
 
         return new OcrReceiptResult
         {
@@ -357,35 +381,32 @@ public class OcrValidator
     }
 
     /// <summary>Ham kırılımı temizler: rate'i null/negatif ya da net+vat'ı boş satırlar elenir.</summary>
-    private static List<OcrVatBreakdownRow> SanitizeBreakdown(List<LlmVatBreakdownRow>? rawRows)
+    private static List<OcrVatBreakdownRow> SanitizeBreakdown(List<LlmVatBreakdownRow>? rawRows, List<string> warnings, ref int penalties)
     {
         var rows = new List<OcrVatBreakdownRow>();
-        foreach (var row in rawRows ?? new List<LlmVatBreakdownRow>())
+        foreach (var row in rawRows ?? new())
         {
-            if (row is null) continue;
-            var net = row.Net ?? 0m;
-            var vat = row.Vat ?? 0m;
-            if (row.Rate is null || row.Rate < 0) continue;
-            if (net == 0m && vat == 0m) continue;
-            rows.Add(new OcrVatBreakdownRow
+            if (row?.Rate is null || !Domain.ReceiptVatMath.SupportedRate(row.Rate.Value))
             {
-                Rate = row.Rate.Value,
-                Net = Math.Round(net, 2),
-                Vat = Math.Round(vat, 2)
-            });
+                warnings.Add("KDV kırılımındaki bir oran okunamadı veya desteklenmiyor; bu satır %0 sayılmadı."); penalties++; continue;
+            }
+            var net = row.Net; var vat = row.Vat;
+            var rate = row.Rate.Value;
+            if (row.Gross.HasValue)
+            {
+                net ??= vat.HasValue ? row.Gross.Value - vat.Value : Domain.ReceiptVatMath.Round(row.Gross.Value / (1 + rate / 100m));
+                vat ??= row.Gross.Value - net.Value;
+                if (Math.Abs(net.Value + vat.Value - row.Gross.Value) > AmountTolerance)
+                { warnings.Add($"%{rate} KDV dahil satır toplamı matrah + KDV ile uyuşmuyor."); penalties++; }
+            }
+            if (net.HasValue) vat ??= Domain.ReceiptVatMath.Round(net.Value * rate / 100m);
+            if (!net.HasValue || !vat.HasValue || net < 0 || vat < 0)
+            { warnings.Add($"%{rate} satırının matrah/KDV tutarı eksik veya negatif; belgeyi kontrol edin."); penalties++; continue; }
+            if (net == 0 && vat == 0) continue;
+            rows.Add(new OcrVatBreakdownRow { Rate = rate, Net = Domain.ReceiptVatMath.Round(net.Value), Vat = Domain.ReceiptVatMath.Round(vat.Value) });
         }
-
-        // Aynı oran birden fazla satırda geldiyse toplanarak birleştirilir (oran başına tek satır).
-        return rows
-            .GroupBy(r => r.Rate)
-            .Select(g => new OcrVatBreakdownRow
-            {
-                Rate = g.Key,
-                Net = Math.Round(g.Sum(x => x.Net), 2),
-                Vat = Math.Round(g.Sum(x => x.Vat), 2)
-            })
-            .OrderByDescending(r => r.Rate)
-            .ToList();
+        return rows.GroupBy(r => r.Rate).Select(g => new OcrVatBreakdownRow
+        { Rate = g.Key, Net = Domain.ReceiptVatMath.Round(g.Sum(r => r.Net)), Vat = Domain.ReceiptVatMath.Round(g.Sum(r => r.Vat)) }).OrderBy(r => r.Rate).ToList();
     }
 
     /// <summary>
@@ -403,8 +424,8 @@ public class OcrValidator
                 penalties++;
             }
 
-            if (row.Rate <= 0) continue;
-            var expectedVat = Math.Round(row.Net * row.Rate / 100m, 2);
+            // Zero percent must also have zero VAT.
+            var expectedVat = Domain.ReceiptVatMath.Round(row.Net * row.Rate / 100m);
             if (Math.Abs(expectedVat - row.Vat) > AmountTolerance)
             {
                 warnings.Add(

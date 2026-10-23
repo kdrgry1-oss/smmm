@@ -173,7 +173,12 @@ function handler(name, requireRange, run) {
 }
 
 app.post("/login-test", handler("login-test", false, (p) => gib.loginTest(p)));
-app.post("/documents", handler("documents", true, (p) => gib.fetchDocuments(p)));
+app.post("/tebligat-document", async (req, res) => {
+  const result = await require("./tebligat-document").fetchDocument(req.body || {});
+  res.json(result);
+});
+
+app.post("/documents", handler("documents", true, (p) => require("./dvd-incoming").fetchIncoming(p)));
 app.post("/tebligat", handler("tebligat", true, (p) => gib.fetchTebligat(p)));
 
 /**

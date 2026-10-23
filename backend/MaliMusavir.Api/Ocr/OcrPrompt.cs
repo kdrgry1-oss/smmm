@@ -33,10 +33,10 @@ public static class OcrPrompt
         "{\"vendorName\": string|null, \"vendorTaxId\": string|null, \"documentNumber\": string|null, " +
         "\"receiptDate\": string|null, \"totalAmount\": number|null, \"vatRate\": number|null, " +
         "\"vatAmount\": number|null, \"netAmount\": number|null, \"discountTotal\": number|null, " +
-        "\"vatBreakdown\": [{\"rate\": number, \"net\": number, \"vat\": number}], " +
+        "\"vatBreakdown\": [{\"rate\": number|null, \"net\": number|null, \"vat\": number|null, \"gross\": number|null}], " +
         "\"currency\": string|null, " +
         "\"plateNumber\": string|null, " +
-        "\"items\": [{\"name\": string, \"amount\": number|null}], " +
+        "\"items\": [{\"name\": string, \"amount\": number|null, \"vatRate\": number|null}], " +
         "\"documentType\": \"perakende_fis\"|\"fatura\"|\"yazar_kasa\"|\"diger\", " +
         "\"confidence\": {\"vendorName\": number, \"vendorTaxId\": number, \"documentNumber\": number, " +
         "\"receiptDate\": number, \"totalAmount\": number, \"vatRate\": number, \"vatAmount\": number, \"netAmount\": number}, " +
@@ -51,20 +51,20 @@ public static class OcrPrompt
         "7. documentNumber: fiş no / belge no / Z no / sıra no ne varsa onu yaz (ör. \"FİŞ NO: 0042\" → \"0042\").\n" +
         "8. totalAmount KDV DAHİL genel toplamdır (\"TOPLAM\", \"TOP\", \"GENEL TOPLAM\"); " +
         "vatAmount TOPLAM KDV tutarı (\"KDV\", \"TOPKDV\"); netAmount TOPLAM matrah (toplam - KDV).\n" +
-        "9. ÇOK ORANLI KDV — ÇOK ÖNEMLİ: fişte birden fazla KDV oranı olabilir (%1 gıda, %10, %20). " +
+        "9. ÇOK ORANLI KDV — ÇOK ÖNEMLİ: fişte birden fazla KDV oranı olabilir (%0, %1, %10, %20). " +
         "Fişin KDV kırılım tablosunu (\"KDV %1\", \"KDV %10\", \"KDV %20\", \"TOPKDV\" satırları, " +
         "\"KDV MATRAH\" blokları, satır sonlarındaki *1/*8/*10/*20 vergi işaretleri) SATIR SATIR oku ve " +
         "vatBreakdown dizisine HER ORAN İÇİN AYRI bir kalem yaz: rate = KDV oranı (%), " +
-        "net = o oranın matrahı (KDV hariç), vat = o oranın KDV tutarı. " +
+        "net = o oranın matrahı (KDV hariç), vat = o oranın KDV tutarı, gross = o oranın KDV dahil iskonto sonrası toplamı. Basılı olmayan net/vat alanlarını null bırakabilirsin; gross ve açıkça okunan oranla yazılım hesaplar. %0 açıkça basılıysa dahil et; oran okunamadığında %0 yazma. " +
         "Tek oranlı fişte dizi tek elemanlıdır. Kırılım hiç okunamıyorsa diziyi boş bırak ([]).\n" +
         "10. İSKONTO/İNDİRİM: fişte \"İSKONTO\", \"İNDİRİM\", \"KAMPANYA\" gibi indirim satırları varsa " +
         "toplam indirim tutarını discountTotal alanına POZİTİF sayı olarak yaz; yoksa null bırak. " +
         "vatBreakdown içindeki net tutarlar ve netAmount HER ZAMAN İSKONTO SONRASI (fiilen ödenen matrah) olmalıdır — " +
-        "iskontoyu matraha ekleme.\n" +
+        "iskontoyu matraha ekleme veya son tutardan ikinci kez düşme. Genel indirimin oranlara dağılımı belgede belirli değilse keyfi dağıtma; warnings alanına yaz.\n" +
         "11. TUTARLILIK: toplam = tüm kırılım netlerinin toplamı + tüm kırılım KDV'lerinin toplamı olmalıdır " +
         "(totalAmount = Σnet + Σvat). netAmount = Σnet, vatAmount = Σvat yaz. " +
-        "vatRate alanına en yüksek tutarlı kırılımın oranını yaz.\n" +
-        "12. items: okuyabildiğin satır kalemlerinin adları ve tutarları (kategori tahmini için önemli).\n" +
+        "Birden fazla oran varsa vatRate=null yaz; tek oranı tüm fişe uygulama. Basılı toplamları kırılıma uydurmak için değiştirme; uyuşmazlığı warnings alanına yaz.\n" +
+        "12. items: okuyabildiğin ürünlerin adları, amount=iskonto sonrası KDV dahil SATIR toplamı, vatRate=üründe açıkça basılı KDV yüzdesi. Birim fiyatı miktarla çarpmadan satır toplamı sanma. Toplam/KDV/ödeme/para üstü satırlarını ürün olarak ekleme. Vergi grup harflerini veya yıldız yanındaki fiyatı oran sanma; açıklaması yoksa vatRate=null. İndirim dağılımı belirsizse miktarları uydurma, warnings alanına yaz.\n" +
         "13. EMİN OLMADIĞIN ALANI NULL BIRAK ve o alanın confidence değerini düşür (0-1 arası). " +
         "ASLA tahmin uydurma; bulanık/kesik alan için warnings'e Türkçe not ekle.\n" +
         "14. Akaryakıt fişlerinde araç plakası basılıdır (ör. 34FPC630, 06 ABC 123); " +
@@ -84,7 +84,7 @@ public static class OcrPrompt
         "1. SADECE geçerli JSON döndür — başka hiçbir metin, açıklama veya kod bloğu işareti yazma.\n" +
         "2. Şema (alan adları birebir böyle):\n" +
         "{\"okcSerialNumber\": string|null, \"zNumber\": string|null, \"reportDate\": string|null, " +
-        "\"vatBreakdown\": [{\"rate\": number, \"net\": number, \"vat\": number}], " +
+        "\"vatBreakdown\": [{\"rate\": number|null, \"net\": number|null, \"vat\": number|null, \"gross\": number|null}], " +
         "\"totalSales\": number|null, \"totalVat\": number|null, " +
         "\"cashTotal\": number|null, \"cardTotal\": number|null, " +
         "\"confidence\": {\"okcSerialNumber\": number, \"zNumber\": number, \"reportDate\": number, " +

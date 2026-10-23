@@ -416,6 +416,14 @@ public class LucaExcelExporter
                 continue;
             }
 
+            var rateRows = ReceiptVatMath.RowsOrLegacy(receipt.VatBreakdowns, receipt.VatRate, receipt.NetAmount, receipt.VatAmount);
+            var vatError = ReceiptVatMath.Validate(receipt.TotalAmount, receipt.NetAmount, receipt.VatAmount, rateRows);
+            if (vatError is not null)
+            {
+                errors.Add($"Fiş {receipt.DocumentNumber ?? receipt.FileName}: {vatError}");
+                continue;
+            }
+
             // Evrak No: OCR/onaydan gelen belge no; yoksa deterministik "FIS-{id kısa}".
             var documentNo = string.IsNullOrWhiteSpace(receipt.DocumentNumber)
                 ? $"FIS-{receipt.Id.ToString("N")[..8].ToUpperInvariant()}"

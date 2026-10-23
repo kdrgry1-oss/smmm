@@ -99,7 +99,7 @@ async function solveWithGemini(imageBuffer) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 20000);
 
     const res = await fetch(url, {
       method: "POST",
@@ -123,7 +123,7 @@ async function solveWithGemini(imageBuffer) {
         ],
         generationConfig: {
           temperature: 0.0,
-          maxOutputTokens: 10,
+          maxOutputTokens: 1024,
         },
       }),
     });

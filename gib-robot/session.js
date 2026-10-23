@@ -84,6 +84,7 @@ function loadState(username) {
 function loadStateByKey(key) {
   const raw = readRawByKey(key);
   if (!raw) return null;
+  if (!raw.parsed.__sessionStorage?.token) return null;
   if (raw.parsed.expiredAt) return null; // heartbeat "düştü" demiş → yeniden giriş şart
   if (Date.now() - raw.mtimeMs > SESSION_MAX_AGE_MS) return null;
   return raw.parsed;
@@ -113,6 +114,8 @@ function saveState(username, state) {
 
 /** saveState'in anahtar tabanlı hali. Yazım mtime'ı tazeler → TTL penceresi ilerler. */
 function saveStateByKey(key, state) {
+  // Never replace a usable saved session with an incomplete SPA snapshot.
+  if (!state?.__sessionStorage?.token) return;
   if (!ensureDir()) return;
   const file = sessionPathByKey(key);
   try {
@@ -240,7 +243,7 @@ async function withKeyLock(key, fn) {
 
   if (waited === "timeout") {
     release(); // zinciri tıkama: arkadakiler ilerleyebilsin
-    if (locks.get(key) === chain) locks.delete(key);
+    chain.finally(() => { if (locks.get(key) === chain) locks.delete(key); });
     const err = new Error(
       "Bu mükellef için başka bir çekim işlemi sürüyor. Lütfen birkaç dakika sonra tekrar deneyin."
     );

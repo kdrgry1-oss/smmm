@@ -786,7 +786,8 @@ public class CodingEngine
 
         var vendorTaxId = receipt.VendorTaxId!;
         var finalCode = receipt.AccountCode!;
-        var vatRate = receipt.VatRate ?? 0m;
+        if (!receipt.VatRate.HasValue || receipt.VatBreakdowns.Select(b => b.VatRate).Distinct().Count() > 1) return;
+        var vatRate = receipt.VatRate.Value;
         var now = DateTime.UtcNow;
 
         var memories = await _db.AccountMemories

@@ -194,7 +194,9 @@ public class DeclarationService
         string doneDetail;
         if (type == DeclarationType.KDV1)
         {
-            var summary = await ComputeKdv1SummaryAsync(clientId, period, periodStart, periodEnd, ct);
+            Kdv1Summary summary;
+            try { summary = await ComputeKdv1SummaryAsync(clientId, period, periodStart, periodEnd, ct); }
+            catch (InvalidDataException ex) { return DeclarationResult.Fail(ex.Message); }
             summaryJson = JsonSerializer.Serialize(summary, SummaryJsonOptions);
             doneDetail = $"({summary.GelenFaturaSayisi} onaylı fatura + {summary.FisSayisi} onaylı fiş işlendi)";
         }
@@ -355,7 +357,7 @@ public class DeclarationService
                         r.Status == ReceiptStatus.Approved &&
                         r.ReceiptDate != null &&
                         r.ReceiptDate >= periodStart && r.ReceiptDate < periodEnd)
-            .Select(r => new { r.VatRate, r.VatAmount, r.NetAmount, r.IsKkeg, r.KkegAmount })
+            .Select(r => new { r.VatRate, r.VatAmount, r.NetAmount, r.IsKkeg, r.KkegAmount, r.VatBreakdowns, r.TotalAmount, r.DocumentNumber })
             .ToListAsync(ct);
 
         // Oran kırılımı: %1 → 191.01, %10 → 191.02, %20 → 191.03, diğer → 191.99.
@@ -392,6 +394,9 @@ public class DeclarationService
 
         foreach (var receipt in receipts)
         {
+            var rateRows = ReceiptVatMath.RowsOrLegacy(receipt.VatBreakdowns, receipt.VatRate, receipt.NetAmount, receipt.VatAmount);
+            var vatError = ReceiptVatMath.Validate(receipt.TotalAmount, receipt.NetAmount, receipt.VatAmount, rateRows);
+            if (vatError is not null) throw new InvalidDataException($"Fiş {receipt.DocumentNumber}: {vatError} Fişi düzeltip yeniden hesaplayın.");
             var net = receipt.NetAmount ?? 0m;
             var vat = receipt.VatAmount ?? 0m;
             var disallowed = KkegAnalyzer.DisallowedVat(receipt.IsKkeg, receipt.KkegAmount, net, vat);
@@ -399,7 +404,8 @@ public class DeclarationService
             if (receipt.IsKkeg && receipt.KkegAmount is > 0)
                 kkegTotal += net > 0 ? Math.Min(receipt.KkegAmount.Value, net) : receipt.KkegAmount.Value;
 
-            AddToBucket(receipt.VatRate ?? 0m, net, vat - disallowed);
+            foreach (var row in ReceiptVatMath.DeductibleRows(rateRows, disallowed))
+                AddToBucket(row.Rate, row.Net, row.Vat);
         }
 
         var breakdown = buckets.Values

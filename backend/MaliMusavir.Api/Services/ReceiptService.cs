@@ -380,7 +380,7 @@ public class ReceiptService
             ? DateTime.SpecifyKind(ocr.ReceiptDate.Value, DateTimeKind.Utc)
             : null;
         receipt.TotalAmount = ocr.TotalAmount;
-        receipt.VatRate = ocr.VatRate;
+        receipt.VatRate = ocr.VatBreakdown.Select(b => b.Rate).Distinct().Count() == 1 ? ocr.VatBreakdown[0].Rate : null;
         receipt.VatAmount = ocr.VatAmount;
         receipt.NetAmount = ocr.NetAmount;
 
@@ -388,6 +388,10 @@ public class ReceiptService
         // toplamlarına, VatRate en yüksek tutarlı orana eşitlenir (geriye uyumluluk).
         receipt.DiscountTotal = ocr.DiscountTotal;
         ApplyVatBreakdown(receipt, ocr.VatBreakdown.Select(b => (b.Rate, b.Net, b.Vat)));
+        // Preserve independently read header totals so a mismatch cannot disappear.
+        receipt.NetAmount = ocr.NetAmount;
+        receipt.VatAmount = ocr.VatAmount;
+        receipt.OcrWarning = ocr.Warnings.Count > 0 ? string.Join(" ", ocr.Warnings.Distinct()) : null;
 
         // Gider gösterilebilirlik: alkol/tütün anahtar kelimeleri → red (belge eski uyarısı DTO'da türetilir).
         var eligibilityText = TextNormalizer.Normalize($"{ocr.VendorName} {ocr.ItemsSummary}");
@@ -523,12 +527,16 @@ public class ReceiptService
             ? DateTime.SpecifyKind(ocr.ReceiptDate.Value, DateTimeKind.Utc)
             : null;
         receipt.TotalAmount = ocr.TotalAmount;
-        receipt.VatRate = ocr.VatRate;
+        receipt.VatRate = ocr.VatBreakdown.Select(b => b.Rate).Distinct().Count() == 1 ? ocr.VatBreakdown[0].Rate : null;
         receipt.VatAmount = ocr.VatAmount;
         receipt.NetAmount = ocr.NetAmount;
         receipt.CashTotal = ocr.CashTotal;
         receipt.CardTotal = ocr.CardTotal;
         ApplyVatBreakdown(receipt, ocr.VatBreakdown.Select(b => (b.Rate, b.Net, b.Vat)));
+        // Preserve independently read header totals so a mismatch cannot disappear.
+        receipt.NetAmount = ocr.NetAmount;
+        receipt.VatAmount = ocr.VatAmount;
+        receipt.OcrWarning = ocr.Warnings.Count > 0 ? string.Join(" ", ocr.Warnings.Distinct()) : null;
 
         // Gelir belgesi: gider gösterilebilirlik kapısına takılmaz; hesap önerisi 600 (satış
         // gelirleri) — export'taki asıl hesap "zrapor.gelir.hesap" parametresinden okunur.
@@ -570,7 +578,7 @@ public class ReceiptService
 
         receipt.NetAmount = Math.Round(list.Sum(r => r.Net), 2);
         receipt.VatAmount = Math.Round(list.Sum(r => r.Vat), 2);
-        receipt.VatRate = list.OrderByDescending(r => r.Net + r.Vat).First().Rate;
+        receipt.VatRate = list.Count == 1 ? list[0].Rate : null;
     }
 
     /// <summary>
@@ -601,9 +609,11 @@ public class ReceiptService
             receipt.DiscountTotal = request.DiscountTotal.Value > 0 ? Math.Round(request.DiscountTotal.Value, 2) : null;
         if (request.VatBreakdown is { Count: > 0 })
         {
-            ApplyVatBreakdown(receipt, request.VatBreakdown
-                .Where(b => b is not null && b.VatRate >= 0)
-                .Select(b => (b.VatRate, b.NetAmount, b.VatAmount)));
+            var candidateRows = request.VatBreakdown.Select(b => new ReceiptVatBreakdown
+                { VatRate = b.VatRate, NetAmount = b.NetAmount, VatAmount = b.VatAmount }).ToList();
+            var rowError = ReceiptVatMath.Validate(receipt.TotalAmount, candidateRows.Sum(b => b.NetAmount), candidateRows.Sum(b => b.VatAmount), candidateRows);
+            if (rowError is not null) return new ReceiptOperationOutcome { Success = false, ErrorMessage = rowError };
+            ApplyVatBreakdown(receipt, candidateRows.Select(b => (b.VatRate, b.NetAmount, b.VatAmount)));
         }
 
         if (receipt.ReceiptDate is null)
@@ -611,17 +621,15 @@ public class ReceiptService
         if (receipt.TotalAmount is null or <= 0)
             return new ReceiptOperationOutcome { Success = false, ErrorMessage = "Fiş tutarı boş veya sıfır olamaz." };
 
-        // Eksik KDV/matrah tamamlanır: toplam + oran biliniyorsa matrah geriye hesaplanır.
-        if (receipt.NetAmount is null && receipt.VatRate is not null)
+        // Explicit single-rate corrections may fill missing amounts; unknown is never zero.
+        if (receipt.VatBreakdowns.Count == 0 && receipt.VatRate.HasValue && ReceiptVatMath.SupportedRate(receipt.VatRate.Value))
         {
-            receipt.NetAmount = Math.Round(receipt.TotalAmount.Value / (1 + receipt.VatRate.Value / 100m), 2);
-            receipt.VatAmount = Math.Round(receipt.TotalAmount.Value - receipt.NetAmount.Value, 2);
+            receipt.NetAmount ??= ReceiptVatMath.Round(receipt.TotalAmount.Value / (1 + receipt.VatRate.Value / 100m));
+            receipt.VatAmount ??= ReceiptVatMath.Round(receipt.TotalAmount.Value - receipt.NetAmount.Value);
+            ApplyVatBreakdown(receipt, new[] { (receipt.VatRate.Value, receipt.NetAmount.Value, receipt.VatAmount.Value) });
         }
-        if (receipt.NetAmount is null)
-        {
-            receipt.NetAmount = receipt.TotalAmount;
-            receipt.VatAmount ??= 0m;
-        }
+        var vatError = ReceiptVatMath.Validate(receipt.TotalAmount, receipt.NetAmount, receipt.VatAmount, receipt.VatBreakdowns);
+        if (vatError is not null) return new ReceiptOperationOutcome { Success = false, ErrorMessage = vatError };
 
         // Gider gösterilebilirlik kapısı: reddedilen fiş ancak SMMM açıkça üstlenirse onaylanır.
         if (receipt.ExpenseEligible == false && !request.OverrideEligibility)

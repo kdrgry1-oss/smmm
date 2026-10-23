@@ -429,10 +429,17 @@ export interface GibLoginCompleteResult {
 }
 
 /** GİB girişini başlatır: captcha görseli + pendingId döner (kayıtlı kimlik kullanılır). */
-export function beginGibLogin(clientId: string) {
-  return api<GibLoginBeginResult>(`/api/clients/${clientId}/integration/gib-login/begin`, {
-    method: "POST",
-  });
+export async function beginGibLogin(clientId: string, manual = false): Promise<GibLoginBeginResult> {
+  if (manual) return api<GibLoginBeginResult>(`/api/clients/${clientId}/integration/gib-login/begin?manual=true`, {method:"POST"});
+  const {jobId} = await api<{jobId:string}>(`/api/clients/${clientId}/integration/gib-login/auto-start`, {method:"POST"});
+  // Short status requests avoid gateway timeouts. The durable job survives closing the panel.
+  for (let attempt=0; attempt<180; attempt++) {
+    const result = await api<{status:string; message?:string}>(`/api/clients/${clientId}/integration/gib-login/auto-status/${jobId}`);
+    if (result.status === "Basarili") return {success:true, alreadyLoggedIn:true, message:"GİB oturumu doğrulandı ve tebligat taraması tamamlandı.", pendingId:null,captchaImage:null,expiresInSeconds:null};
+    if (result.status === "Basarisiz" || result.status === "Iptal") throw new Error(result.message || "Otomatik giriş tamamlanamadı. Doğrulama ekranını doğrudan açabilirsiniz.");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+  throw new Error("İşlem arka planda devam ediyor. Durumunu Gönderim Kuyruğu ekranından izleyebilirsiniz.");
 }
 
 /** Kullanıcının okuduğu doğrulama koduyla GİB girişini tamamlar (oturum 12 saat saklanır). */

@@ -108,9 +108,9 @@ function readForHeartbeat(clientKey) {
   }
 }
 
-/** Bir keepalive turu: tüm canlı oturumlar en fazla 3 eşzamanlı işçiyle yoklanır. */
+/** Canlı oturumları yokla; düşen veya önceden düşmüş oturumlar için yenileme bildir. */
 async function runSweep() {
-  const sessions = session.listSessions().filter((s) => !s.expired);
+  const sessions = session.listSessions();
   if (sessions.length === 0) return;
 
   console.log(`[keepalive] tur başladı — oturum:${sessions.length}`);
@@ -121,12 +121,13 @@ async function runSweep() {
     while (queue.length > 0 && !stopped) {
       const clientKey = queue.shift();
       try {
-        const status = await heartbeatOne(clientKey);
+        const status = sessions.find(s => s.clientKey === clientKey)?.expired ? "expired" : await heartbeatOne(clientKey);
         counts[status] = (counts[status] || 0) + 1;
         if (status === "expired") {
+          await require("./session-renewal-event").notifyExpired(clientKey);
           console.warn(
             `[keepalive] oturum DÜŞTÜ, expired işaretlendi — mükellef:${shortKey(clientKey)} ` +
-              "(panelde \"yenilenmeli\" görünecek; doğrulama koduyla yenilenmeli)"
+              "(otomatik giriş olayı gönderildi)"
           );
         } else if (status === "skipped") {
           console.log(

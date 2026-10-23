@@ -80,7 +80,7 @@ export default function GibLoginModal({
   );
 
   /** begin ucu: captcha görselini getirir (Yeni Kod düğmesi de bunu çağırır). */
-  const startLogin = useCallback(async () => {
+  const startLogin = useCallback(async (manual = false) => {
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -90,7 +90,7 @@ export default function GibLoginModal({
     setAttemptsLeft(null);
     try {
       const result =
-        mode === "advisor" ? await beginGibAdvisorLogin() : await beginGibLogin(clientId!);
+        mode === "advisor" ? await beginGibAdvisorLogin() : await beginGibLogin(clientId!, manual);
       if (result.alreadyLoggedIn) {
         // Giriş yapıldı (kayıtlı oturum veya OCR ile otomatik çözüldü)
         finishWithSuccess(
@@ -226,6 +226,11 @@ export default function GibLoginModal({
             : "Dijital Vergi Dairesi girişi için görseldeki doğrulama kodunu girin."}
         </p>
 
+        {mode === "client" && !loading && !success && !submitting && (
+          <button type="button" className="btn-secondary mt-3" onClick={() => startLogin(true)}>
+            Doğrulama ekranını doğrudan aç
+          </button>
+        )}
         {success ? (
           <div className="mt-5 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
             ✓ {success}
@@ -334,7 +339,7 @@ export default function GibLoginModal({
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={startLogin}
+                onClick={() => startLogin()}
                 disabled={submitting}
                 title="Yeni bir doğrulama kodu görseli getirir (girişe baştan başlar)."
               >

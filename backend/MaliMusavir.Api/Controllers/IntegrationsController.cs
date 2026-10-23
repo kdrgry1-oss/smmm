@@ -382,9 +382,35 @@ public class IntegrationsController : ControllerBase
     /// ŞİFRE GÜVENLİĞİ: şifre yalnız şifreli kayıttan çözülüp robota İÇ AĞDA bir kez gider;
     /// bu ucun yanıtında ve loglarda ASLA yer almaz.
     /// </summary>
+    [HttpPost("gib-login/auto-start")]
+    public async Task<IActionResult> StartAutomaticGibLogin(Guid clientId,
+        [FromServices] MaliMusavir.Api.Services.OutboundJobService jobs, CancellationToken ct)
+    {
+        var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == clientId, ct);
+        if (client is null) return NotFound(new { message = "Mükellef bulunamadı." });
+        var credentials = await ResolveGibCredentialsAsync(clientId, ct);
+        if (credentials.Error is not null) return BadRequest(new { message = credentials.Error });
+        var job = await jobs.EnqueueAsync(client.TenantId,
+            MaliMusavir.Api.Services.OutboundJobService.TypeTebligatSync,
+            new MaliMusavir.Api.Services.OutboundJobService.TebligatPayload { ClientId = clientId }, ct);
+        return Ok(new { jobId = job.Id });
+    }
+
+    [HttpGet("gib-login/auto-status/{jobId:guid}")]
+    public async Task<IActionResult> AutomaticGibLoginStatus(Guid clientId, Guid jobId, CancellationToken ct)
+    {
+        var job = await _db.OutboundJobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null || job.Type != MaliMusavir.Api.Services.OutboundJobService.TypeTebligatSync)
+            return NotFound(new { message = "Giriş işi bulunamadı." });
+        var payload = System.Text.Json.JsonSerializer.Deserialize<MaliMusavir.Api.Services.OutboundJobService.TebligatPayload>(
+            job.PayloadJson, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        if (payload?.ClientId != clientId) return NotFound(new { message = "Giriş işi bulunamadı." });
+        return Ok(new { status = job.Status.ToString(), message = job.LastError });
+    }
+
     [HttpPost("gib-login/begin")]
     public async Task<ActionResult<GibLoginBeginResponse>> GibLoginBegin(
-        Guid clientId, CancellationToken ct = default)
+        Guid clientId, [FromQuery] bool manual = false, CancellationToken ct = default)
     {
         var client = await _db.Clients.AsNoTracking().FirstOrDefaultAsync(c => c.Id == clientId, ct);
         if (client is null)
@@ -394,7 +420,8 @@ public class IntegrationsController : ControllerBase
         if (credentials.Error is not null)
             return BadRequest(new { message = credentials.Error });
 
-        // 1. ÖNCE OTOMATİK GİRİŞ DENE (Yerel OCR ile Captcha Çözümü):
+        // Existing automatic solver remains the default; explicit manual fallback skips it.
+        if (!manual)
         try
         {
             var autoResult = await _gibRobot.AutoLoginAsync(credentials.Username!, credentials.Password!, ct);

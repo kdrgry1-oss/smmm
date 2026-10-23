@@ -34,6 +34,7 @@ const { chromium } = require("playwright");
 const S = require("./selectors");
 const session = require("./session");
 const captchaSolver = require("./captcha-solver");
+const flowBudget = require("./flow-budget");
 
 /** Tek isteğin toplam bütçesi. */
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 150000);
@@ -121,6 +122,8 @@ async function openContext(storageState, options = {}) {
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
+
+  flowBudget.track(browser);
 
   // sessionStorage storageState'in parçası DEĞİLDİR; kendi alanımızda taşıyoruz.
   const savedSessionStorage = storageState && storageState.__sessionStorage;
@@ -479,6 +482,12 @@ function apiFailedError(message) {
  * bulunur (uç/gövde değişikliğini canlıda teşhis etmek için). Token mesajlara yazılmaz.
  */
 function ensureApiResponse(res, label) {
+  if (res.status === 403) {
+    const err = captchaLoginRequiredError();
+    err.message = 'GİB mevcut oturumun e-Tebligat erişimini reddetti (403). Oturum yenilenmeli; yenilemeden sonra devam ederse GİB erişim yetkisi kontrol edilmeli.';
+    err.accessDenied = true;
+    throw err;
+  }
   if (res.tokenMissing || res.status === 401) {
     // sessionStorage'da token yok ya da API 401 dedi → oturum düşmüş.
     throw captchaLoginRequiredError();
@@ -711,11 +720,16 @@ async function assertNoManualStep(page, label) {
 
 /** Oturum açık mı? (giriş göstergesi görünüyor ve giriş formu yok) */
 async function isLoggedIn(page) {
-  const marker = await S.isPresent(page, "loggedInMarker", 2500);
-  if (marker) return true;
-  // Gösterge bulunamadıysa giriş formu duruyor mu diye bak.
-  const loginForm = await S.isPresent(page, "loginPassword", 1500);
-  return !loginForm && !page.url().toLowerCase().includes("login");
+  // Public portal text is not proof of authentication. Wait for the SPA to
+  // finish sign-in and provide the token used by the authenticated APIs.
+  try {
+    await page.waitForFunction(() => {
+      const token = window.sessionStorage.getItem("token");
+      return typeof token === "string" && token.trim().length > 0;
+    }, null, { timeout: 10000 });
+  } catch { return false; }
+  const loginForm = await S.isPresent(page, "loginPassword", 1000);
+  return !loginForm;
 }
 
 /**
@@ -1633,7 +1647,7 @@ async function sessionHeartbeat(storageState) {
     async function probe(url) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
       await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
-      if (await S.isPresent(page, "loggedInMarker", 3000)) return "alive";
+      if (await isLoggedIn(page)) return "alive";
       if (await S.isPresent(page, "loginPassword", 1500)) return "loggedOut";
       return "uncertain";
     }
@@ -1708,7 +1722,7 @@ async function fetchDocuments({ username, password, from, to, sessionKey, target
         );
       }
     } catch (err) {
-      if (err && (err.requiresManual || err.needsCaptchaLogin)) throw err; // oturum düşmüş
+      if (err && (err.requiresManual || err.needsCaptchaLogin || err.accessDenied)) throw err; // oturum düşmüş
       apiError = err;
       console.warn(
         `[documents] API çekimi başarısız — mevcut akışa dönülüyor: ${String(err && err.message).slice(0, 200)}`
@@ -1862,7 +1876,7 @@ async function fetchTebligat({ username, password, from, to, sessionKey, targetT
       return { ok: true, message, items: api.items };
     } catch (err) {
       // Oturum düşmüş (401 / token yok) → mevcut captcha'lı giriş akışı devralır.
-      if (err && (err.requiresManual || err.needsCaptchaLogin)) throw err;
+      if (err && (err.requiresManual || err.needsCaptchaLogin || err.accessDenied)) throw err;
       apiError = err;
       console.warn(
         `[tebligat] API çekimi başarısız — DOM fallback'i denenecek: ${String(err && err.message).slice(0, 200)}`
@@ -1886,7 +1900,7 @@ async function fetchTebligat({ username, password, from, to, sessionKey, targetT
         items: api.items,
       };
     } catch (err) {
-      if (err && (err.requiresManual || err.needsCaptchaLogin)) throw err;
+      if (err && (err.requiresManual || err.needsCaptchaLogin || err.accessDenied)) throw err;
       apiError = err;
       console.warn(
         `[tebligat] API ikinci deneme başarısız — fallback: ${String(err && err.message).slice(0, 200)}`
@@ -2073,18 +2087,9 @@ async function runFlow(username, password, work, options = {}) {
   return session
     .withClientLock(identity, async () => {
       let cached = session.loadState(identity);
-      if (!cached) {
-        if (username && password) {
-          console.log(`[runFlow] Kayıtlı oturum yok; otomatik OCR girişi deneniyor — kimlik:${identity}`);
-          const loginRes = await autoLogin({ username, password, sessionKey });
-          if (loginRes.ok) {
-            cached = session.loadState(identity);
-          }
-        }
-        if (!cached) {
-          // Otomatik giriş yapılamadı/şifre yok → kullanıcı doğrulama kodunu girmeli.
-          throw captchaLoginRequiredError();
-        }
+      if (!cached) throw captchaLoginRequiredError();
+      if ([...pendingLogins.values()].some(e => e.storageKey === identity)) {
+        const err = new Error("Bu hesapta doğrulama işlemi sürüyor."); err.busy = true; throw err;
       }
 
       /** Tek deneme: tarayıcı aç → oturum doğrula → (mükellef seç) → iş → kapat. */
@@ -2112,45 +2117,11 @@ async function runFlow(username, password, work, options = {}) {
         }
       }
 
-      const attempt = (async () => {
-        try {
-          return await attemptOnce(cached);
-        } catch (err) {
-          // Oturum düşmüşse ve kullanıcı adı/şifre varsa bir kez otomatik OCR ile tazelemeyi dene
-          if (err && err.needsCaptchaLogin && username && password) {
-            console.log(`[runFlow] Oturum düşmüş; otomatik OCR girişiyle yenileniyor — kimlik:${identity}`);
-            const loginRes = await autoLogin({ username, password, sessionKey });
-            if (loginRes.ok) {
-              const freshState = session.loadState(identity);
-              if (freshState) {
-                return await attemptOnce(freshState);
-              }
-            }
-          }
-          if (err && err.needsCaptchaLogin) session.markExpired(identity);
-          throw err;
-        }
-      })();
-
-      let timeoutHandle = null;
-      const budget = new Promise((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          const err = new Error(
-            "GİB portalı 90 saniye içinde yanıt vermedi. İşlem güvenli şekilde iptal edildi; " +
-              "lütfen daha sonra tekrar deneyin."
-          );
-          err.timedOut = true;
-          reject(err);
-        }, REQUEST_TIMEOUT_MS);
-      });
-
       try {
-        return await Promise.race([attempt, budget]);
-      } finally {
-        clearTimeout(timeoutHandle);
-        // Zaman aşımında arka planda süren deneme kendi finally'sinde tarayıcıyı kapatır;
-        // yakalanmamış reddi susturmak için attempt'e boş bir catch takılır.
-        attempt.catch(() => {});
+        return await flowBudget.bounded(() => attemptOnce(cached), REQUEST_TIMEOUT_MS);
+      } catch (err) {
+        if (err && err.needsCaptchaLogin) session.markExpired(identity);
+        throw err;
       }
     })
     .catch((err) => toErrorResponse(err));
@@ -2203,11 +2174,53 @@ function toErrorResponse(err) {
   return { ok: false, message, items: [], diagnostic };
 }
 
+// All automatic renewal requests share one account lock and one in-flight result.
+const renewalFlights = new Map();
+const renewalFailures = new Map();
+function coordinatedAutoLogin(args) {
+  const identity = args.sessionKey || args.username;
+  const key = session.sessionKey(identity);
+  if (renewalFlights.has(key)) return renewalFlights.get(key);
+  const task = session.withClientLock(identity, async () => {
+    if ([...pendingLogins.values()].some(e => e.storageKey === identity))
+      return {ok:false, requiresManual:true, needsCaptchaLogin:true, message:"Bu hesap için açık doğrulama işlemini tamamlayın."};
+    const cached = session.loadState(identity);
+    if (cached) {
+      const status = await flowBudget.bounded(() => sessionHeartbeat(cached), 45000);
+      if (status.alive) { session.saveState(identity, status.storageState); return {ok:true, alreadyLoggedIn:true}; }
+      if (status.uncertain) return {ok:false, retryable:true, message:"GİB oturumunun durumu doğrulanamadı; daha sonra tekrar denenecek."};
+      session.markExpired(identity);
+    }
+    const last = renewalFailures.get(key);
+    if (last && Date.now()-last.at < 300000) return last.result;
+    const result = await flowBudget.bounded(() => autoLogin(args), 300000);
+    if (!result.ok) renewalFailures.set(key,{at:Date.now(),result});
+    else renewalFailures.delete(key);
+    // Expire failure-cache entries without retaining credentials or unbounded keys.
+    for(const [k,v] of renewalFailures) if(Date.now()-v.at>=300000) renewalFailures.delete(k);
+    return result;
+  }).catch(toErrorResponse).finally(()=>renewalFlights.delete(key));
+  renewalFlights.set(key,task);
+  return task;
+}
+async function coordinatedLoginBegin(args) {
+  const identity=args.sessionKey||args.username;
+  return session.withClientLock(identity,async()=>{
+    for(const [id,e] of pendingLogins) if(e.storageKey===identity) await closePendingLogin(id);
+    return loginBegin(args);
+  }).catch(toErrorResponse);
+}
+async function coordinatedLoginComplete(args) {
+  const entry=pendingLogins.get(args.pendingId);
+  if(!entry) return loginComplete(args);
+  return session.withClientLock(entry.storageKey,()=>loginComplete(args)).catch(toErrorResponse);
+}
+
 module.exports = {
   loginTest,
-  loginBegin,
-  loginComplete,
-  autoLogin,
+  loginBegin: coordinatedLoginBegin,
+  loginComplete: coordinatedLoginComplete,
+  autoLogin: coordinatedAutoLogin,
   fetchDocuments,
   fetchTebligat,
   fetchAdvisorClients,

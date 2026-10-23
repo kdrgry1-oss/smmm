@@ -16,6 +16,7 @@ import {
   getETebligatDocumentUrl,
   getETebligatDownloadUrl,
 } from "@/lib/api";
+import TebligatDocument from "@/components/TebligatDocument";
 import GibLoginModal from "@/components/GibLoginModal";
 
 function formatDate(iso: string | null): string {
@@ -697,75 +698,17 @@ export default function ETebligatPage() {
               </div>
 
               {/* Resmi Belge & Ekler (GİB'e Bağlanmadan Doğrudan İnceleme) */}
-              <div className="rounded-xl border border-navy-200 bg-white p-4 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-navy-100 pb-3 mb-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-bold text-navy-950 flex items-center gap-1.5">
-                        <span>📑</span> Resmi e-Tebligat Evrakı &amp; Ekler
-                      </h4>
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
-                        ✓ GİB&apos;e Gitmeden Doğrudan Görüntüleme
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-navy-500">
-                      T.C. Hazine ve Maliye Bakanlığı Gelir İdaresi Başkanlığı resmi formatında tebellüğ evrakı ve tahakkuk detayları.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={getETebligatDocumentUrl(selectedItem.id)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg border border-navy-300 bg-white px-3 py-1.5 text-xs font-semibold text-navy-700 shadow-sm hover:bg-navy-50"
-                      title="Yeni sekmede tam sayfa resmi evrakı aç"
-                    >
-                      ↗ Yeni Sekmede Aç
-                    </a>
-                    <a
-                      href={getETebligatDownloadUrl(selectedItem.id)}
-                      download
-                      className="inline-flex items-center gap-1 rounded-lg bg-navy-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-navy-800"
-                      title="Evrakı indir"
-                    >
-                      📥 Belgeyi İndir
-                    </a>
-                  </div>
-                </div>
-
-                {/* Gömülü Resmi Evrak Önizleme */}
-                <div className="relative w-full overflow-hidden rounded-lg border border-navy-200 bg-navy-50/50">
-                  <iframe
-                    id="tebligat-doc-frame"
-                    src={getETebligatDocumentUrl(selectedItem.id)}
-                    title="Resmi e-Tebligat Evrakı"
-                    className="h-[480px] w-full rounded-lg border-0 bg-white"
-                  />
-                </div>
-                <p className="mt-2.5 text-[11px] text-navy-400 text-center">
-                  * 213 sayılı VUK md. 107/A ve 5070 sayılı Kanun uyarınca resmi bildirim dökümüdür.
-                </p>
-              </div>
+              {selectedItem.documentContent?.trim() && (
+                <section className="rounded-xl border border-navy-200 p-4" aria-label="Tebligat metni">
+                  <h3 className="font-bold text-navy-900">Tebligat Metni</h3>
+                  <div className="mt-3 whitespace-pre-wrap break-words text-sm text-navy-800">{selectedItem.documentContent}</div>
+                </section>
+              )}
+              <TebligatDocument key={selectedItem.id} id={selectedItem.id} />
             </div>
 
             {/* Modal Alt Kısmı (Aksiyonlar) */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-navy-100 bg-navy-50/50 px-6 py-4">
-              <button
-                type="button"
-                onClick={() => {
-                  const frame = document.getElementById("tebligat-doc-frame") as HTMLIFrameElement | null;
-                  if (frame && frame.contentWindow) {
-                    frame.contentWindow.focus();
-                    frame.contentWindow.print();
-                  } else {
-                    window.print();
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-navy-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-navy-800 shadow-sm hover:bg-navy-50"
-              >
-                🖨 Resmi Evrakı Yazdır / PDF Kaydet
-              </button>
-
               <div className="flex items-center gap-3">
                 {!selectedItem.isRead && (
                   <button

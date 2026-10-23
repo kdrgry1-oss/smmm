@@ -692,6 +692,7 @@ export default function ReceiptsPage() {
         const totals = breakdownTotals(rows);
         next.netAmount = totals.net.toFixed(2);
         next.vatAmount = totals.vat.toFixed(2);
+        next.vatRate = new Set(rows.map(r => r.vatRate)).size === 1 ? rows[0].vatRate : "";
       }
       return next;
     });
@@ -757,19 +758,30 @@ export default function ReceiptsPage() {
       const isEmpty = !row.vatRate.trim() && !row.netAmount.trim() && !row.vatAmount.trim();
       if (isEmpty) continue;
       const rate = parseOptional(row.vatRate);
-      const net = parseOptional(row.netAmount) ?? 0;
-      const vat = parseOptional(row.vatAmount) ?? 0;
-      if (rate === null || rate < 0 || rate > 100) {
-        setActionError("KDV kırılımında geçerli bir oran girin (0-100).");
+      const net = parseOptional(row.netAmount);
+      const vat = parseOptional(row.vatAmount);
+      if (rate === null || ![0, 1, 8, 10, 18, 20].includes(rate)) {
+        setActionError("KDV kırılımında fişte basılı oranı girin (%0, %1, %10, %20; eski belgelerde %8/%18).");
         return;
       }
-      if (net < 0 || vat < 0) {
-        setActionError("KDV kırılımında matrah ve KDV tutarları negatif olamaz.");
+      if (net === null || vat === null || net < 0 || vat < 0) {
+        setActionError("KDV kırılımında matrah ve KDV tutarları boş veya negatif olamaz.");
+        return;
+      }
+      if (Math.abs(Math.round(net * rate) / 100 - vat) > 0.050001) {
+        setActionError(`%${rate} satırında matrah × oran ile KDV tutarı uyuşmuyor.`);
         return;
       }
       breakdownRows.push({ vatRate: rate, netAmount: net, vatAmount: vat });
     }
 
+    if (breakdownRows.length > 0) {
+      const sum = breakdownRows.reduce((n, r) => n + r.netAmount + r.vatAmount, 0);
+      if (Math.abs(sum - (parseOptional(edit.totalAmount) ?? 0)) > 0.050001) {
+        setActionError("KDV kırılımı toplamı fişin genel toplamıyla uyuşmuyor. İskonto sonrası tutarları kontrol edin.");
+        return;
+      }
+    }
     // İskonto: alan boşaltıldıysa 0 gönderilir (backend alanı temizler); hiç yoksa dokunulmaz.
     const discountValue = parseOptional(edit.discountTotal);
     if (discountValue !== null && discountValue < 0) {
@@ -1563,12 +1575,14 @@ export default function ReceiptsPage() {
                             max="100"
                             className="input !py-2 text-sm"
                             value={edit.vatRate}
+                            disabled={edit.vatBreakdown.length > 0}
+                            placeholder={edit.vatBreakdown.length > 1 ? "Çok oranlı — aşağıdaki kırılım" : "Belgedeki oran"}
                             onChange={(e) =>
                               setEdit((p) => (p ? { ...p, vatRate: e.target.value } : p))
                             }
                           />
                         ) : (
-                          <p className="text-sm">{detail.vatRate !== null ? `%${detail.vatRate}` : "—"}</p>
+                          <p className="text-sm">{detail.vatBreakdown.length > 1 ? "Çok oranlı" : detail.vatRate !== null ? `%${detail.vatRate}` : "Okunamadı"}</p>
                         )}
                       </div>
                       <div>
@@ -1580,6 +1594,7 @@ export default function ReceiptsPage() {
                             min="0"
                             className="input !py-2 text-sm"
                             value={edit.vatAmount}
+                            readOnly={edit.vatBreakdown.length > 0}
                             onChange={(e) =>
                               setEdit((p) => (p ? { ...p, vatAmount: e.target.value } : p))
                             }
@@ -1597,6 +1612,7 @@ export default function ReceiptsPage() {
                             min="0"
                             className="input !py-2 text-sm"
                             value={edit.netAmount}
+                            readOnly={edit.vatBreakdown.length > 0}
                             onChange={(e) =>
                               setEdit((p) => (p ? { ...p, netAmount: e.target.value } : p))
                             }
@@ -1649,6 +1665,7 @@ export default function ReceiptsPage() {
                           )}
                         </div>
 
+                        <p className="mt-2 text-xs text-navy-500">%0, %1, %10 ve %20 ayrı hesaplanır. Tutarlar iskonto sonrası olmalıdır; okunamayan oran %0 kabul edilmez.</p>
                         {edit.vatBreakdown.length === 0 ? (
                           <p className="mt-2 text-xs text-navy-400">
                             Kırılım okunamadı
@@ -1678,6 +1695,7 @@ export default function ReceiptsPage() {
                                           min="0"
                                           max="100"
                                           className="input !py-1.5 text-xs"
+                                          aria-label={`KDV oranı ${idx + 1}`}
                                           value={row.vatRate}
                                           onChange={(e) =>
                                             updateBreakdown((rows) => {
@@ -1693,6 +1711,7 @@ export default function ReceiptsPage() {
                                           step="0.01"
                                           min="0"
                                           className="input !py-1.5 text-xs"
+                                          aria-label={`Matrah ${idx + 1}`}
                                           value={row.netAmount}
                                           onChange={(e) =>
                                             updateBreakdown((rows) => {
@@ -1708,6 +1727,7 @@ export default function ReceiptsPage() {
                                           step="0.01"
                                           min="0"
                                           className="input !py-1.5 text-xs"
+                                          aria-label={`KDV tutarı ${idx + 1}`}
                                           value={row.vatAmount}
                                           onChange={(e) =>
                                             updateBreakdown((rows) => {
@@ -1718,6 +1738,13 @@ export default function ReceiptsPage() {
                                         />
                                       </td>
                                       <td className="py-1 text-right">
+                                        <button type="button" className="text-xs text-navy-600" title="Matrah ve orandan KDV tutarını hesapla"
+                                          onClick={() => updateBreakdown((rows) => {
+                                            const rate = parseAmount(rows[idx].vatRate), net = parseAmount(rows[idx].netAmount);
+                                            if (rate !== null && net !== null && [0,1,8,10,18,20].includes(rate) && net >= 0)
+                                              rows[idx] = { ...rows[idx], vatAmount: (Math.round(net * rate) / 100).toFixed(2) };
+                                            return rows;
+                                          })}>Hesapla</button>
                                         <button
                                           type="button"
                                           className="rounded px-1.5 py-0.5 text-xs font-semibold text-red-600 hover:bg-red-50"

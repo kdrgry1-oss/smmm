@@ -329,6 +329,9 @@ public class GibRobotClient
         }
 
         var client = _httpClientFactory.CreateClient(HttpClientName);
+        // Only renewal may take several minutes. UI uses a background job.
+        if (path.EndsWith("/auto-login", StringComparison.Ordinal))
+            client.Timeout = TimeSpan.FromSeconds(390);
         var url = BaseUrl + path;
 
         try
@@ -409,6 +412,10 @@ public class GibRobotClient
     /// PostAsync ile aynı ilkededir: iş hataları 200 + {ok:false} ile gelir; HTTP/ağ hataları
     /// Türkçe mesajlı başarısız zarfa çevrilir. Şifre/kod LOGA ASLA yazılmaz.
     /// </summary>
+    public class RobotDocumentFile : RobotEnvelope { public string? Base64 { get; set; } public bool NeedsSessionRenewal { get; set; } }
+    public Task<RobotDocumentFile> GetTebligatDocumentAsync(string sessionKey, string externalId, CancellationToken ct) =>
+        PostEnvelopeAsync<RobotDocumentFile>("/tebligat-document", new { sessionKey, externalId }, ct);
+
     private async Task<T> PostEnvelopeAsync<T>(string path, object payload, CancellationToken ct)
         where T : RobotEnvelope, new()
     {
@@ -424,6 +431,9 @@ public class GibRobotClient
         }
 
         var client = _httpClientFactory.CreateClient(HttpClientName);
+        // Only renewal may take several minutes. UI uses a background job.
+        if (path.EndsWith("/auto-login", StringComparison.Ordinal))
+            client.Timeout = TimeSpan.FromSeconds(390);
         var url = BaseUrl + path;
 
         try
