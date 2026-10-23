@@ -25,6 +25,16 @@ services:
     build:
       context: ../gib-robot
     restart: unless-stopped
+    # ZOMBIE SÜREÇ KORUMASI (canlı arıza 23.10.2026: 9.280 zombie chrome → "Cannot fork",
+    # robot captcha görselini bile alamadı). Konteynerde PID 1 öksüz çocukları toplamakla
+    # yükümlüdür; Node bunu YAPMAZ. Chromium her açılışta yardımcı süreç doğurur, bunlar
+    # ölünce zombie kalır ve PID yuvasını bırakmaz. init:true ile Docker, PID 1'e zombie
+    # toplayan tini'yi (docker-init) koyar; Node PID 2 olur.
+    init: true
+    # Olası yeni bir sızıntı TÜM SUNUCUYU değil yalnız bu konteyneri durdursun.
+    # Tek Chromium ~20-50 süreç kullanır; 768 birkaç eşzamanlı tarayıcıya yeter.
+    pids_limit: 768
+    mem_limit: 2g
     environment:
       ROBOT_TOKEN: ${ROBOT_TOKEN}
       SESSION_DIR: /data/sessions
