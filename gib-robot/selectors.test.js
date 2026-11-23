@@ -2,7 +2,18 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const S = require('./selectors');
 function pageWith(visible) {
-  const make = value => ({ first() { return this; }, isVisible: async () => visible(String(value)) });
+  const make = value => ({
+    first() { return this; },
+    isVisible: async () => visible(String(value)),
+    waitFor: async ({ timeout = 1000 } = {}) => {
+      const start = Date.now();
+      while (Date.now() - start <= timeout) {
+        if (await visible(String(value))) return true;
+        await new Promise(r => setTimeout(r, 10));
+      }
+      throw new Error('not visible');
+    }
+  });
   return { locator: make, getByLabel: make, getByPlaceholder: make, getByRole: make, getByText: make };
 }
 test('visible fallback is found without waiting for absent preferred selectors', async () => {
@@ -24,8 +35,14 @@ test('required missing field still reports a selector error', async () => {
 });
 
 test('current GIB dashboard greeting is recognized as a logged-in marker', async () => {
-  let matched = false;
-  const make = pattern => ({ first() { return this; }, isVisible: async () => pattern instanceof RegExp && pattern.test('Dijital Vergi Dairesine Hoş Geldiniz') });
+  const make = pattern => ({
+    first() { return this; },
+    isVisible: async () => pattern instanceof RegExp && pattern.test('Dijital Vergi Dairesine Hoş Geldiniz'),
+    waitFor: async () => {
+      if (!(pattern instanceof RegExp && pattern.test('Dijital Vergi Dairesine Hoş Geldiniz'))) throw new Error('not visible');
+      return true;
+    }
+  });
   const page = { getByText: make, getByRole: () => make(''), locator: () => make('') };
   assert.ok(await S.resolve(page, 'loggedInMarker', { timeout: 0 }));
 });

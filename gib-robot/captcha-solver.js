@@ -36,7 +36,7 @@ async function getWorker() {
  * @param {string} selector
  * @returns {Promise<Buffer>} Temizlenmiş PNG görsel buffer'ı
  */
-async function preprocessCaptchaInPage(page, selector = "img[src*='captcha' i], img[id*='captcha' i], canvas") {
+async function preprocessCaptchaInPage(page, selector = "img[alt*='captcha' i], img[src^='data:image/png;base64'], img[src*='captcha' i], img[id*='captcha' i], canvas") {
   try {
     const base64Cleaned = await page.evaluate((sel) => {
       const el = document.querySelector(sel) || document.querySelector("form img");
@@ -98,8 +98,6 @@ async function solveWithGemini(imageBuffer) {
     "gemini-3.8-flash",
     "gemini-3.5-flash",
     "gemini-3-flash-preview",
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
   ].filter(Boolean);
 
   const base64 = imageBuffer.toString("base64");
@@ -120,7 +118,7 @@ async function solveWithGemini(imageBuffer) {
             {
               parts: [
                 {
-                  text: "Read the security verification code / CAPTCHA from this image. Output ONLY the exact characters (lowercase/uppercase letters and numbers), with no spaces, punctuation, or explanation.",
+                  text: "Extract all alphanumeric characters (letters and numbers) displayed in this image. This is for optical character recognition (OCR) transcription. Return ONLY the exact characters in order with no spaces, no punctuation, and no explanation.",
                 },
                 {
                   inline_data: {
@@ -133,7 +131,10 @@ async function solveWithGemini(imageBuffer) {
           ],
           generationConfig: {
             temperature: 0.0,
-            maxOutputTokens: 64,
+            maxOutputTokens: 1024,
+            thinkingConfig: {
+              thinkingBudget: 0,
+            },
           },
         }),
       });
@@ -141,8 +142,11 @@ async function solveWithGemini(imageBuffer) {
 
       if (res.ok) {
         const data = await res.json();
-        const text =
-          data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        let text = "";
+        for (const p of parts) {
+          if (p.text) text = p.text.trim();
+        }
         const cleaned = text.replace(/[^A-Za-z0-9]/g, "").trim();
         if (cleaned.length >= 4 && cleaned.length <= 7) {
           return { code: cleaned, method: `gemini (${model})` };

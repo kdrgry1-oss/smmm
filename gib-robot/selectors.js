@@ -131,6 +131,8 @@ const SELECTORS = {
   loginPassword: {
     description: "Giriş ekranı — Şifre alanı",
     candidates: [
+      { css: "input#sifre" },
+      { css: "input[name='sifre']" },
       { label: /Şifre|Parola/i },
       { placeholder: /Şifre|Parola/i },
       { css: "input#password" },
@@ -158,6 +160,8 @@ const SELECTORS = {
   captchaImage: {
     description: "Giriş ekranı — Doğrulama Kodu (captcha) görseli",
     candidates: [
+      { css: "img[alt*='captcha' i]" },
+      { css: "img[src^='data:image/png;base64']" },
       { css: "img[src*='captcha' i]" },
       { css: "img[alt*='doğrulama' i]" },
       { css: "img[alt*='dogrulama' i]" },
@@ -172,14 +176,17 @@ const SELECTORS = {
   captchaInput: {
     description: "Giriş ekranı — Doğrulama Kodu alanı",
     candidates: [
+      { css: "input#dk" },
+      { css: "input[name='dk']" },
       { label: /Doğrulama\s*Kodu/i },
       { placeholder: /Doğrulama\s*Kodu/i },
       { role: "textbox", name: /Doğrulama\s*Kodu/i },
       { css: "input[name*='captcha' i]" },
       { css: "input[id*='captcha' i]" },
       { css: "input[name*='dogrulama' i]" },
-      // Son çare: formdaki son metin alanı (1. kullanıcı kodu, şifre type=password'dır).
+      // Son çare: son metin alanı (1. kullanıcı kodu, şifre type=password'dır).
       { css: "form input[type='text']:last-of-type" },
+      { css: "input[type='text']:last-of-type" },
     ],
   },
 
@@ -195,6 +202,7 @@ const SELECTORS = {
       { role: "link", name: /Çıkış|Oturumu\s*Kapat|Güvenli\s*Çıkış/i },
       { text: /Çıkış\s*Yap|Güvenli\s*Çıkış/i },
       { text: /kullan[ıi]c[ıi]\s*de[gğ][iı][sş]t[iı]r/i },
+      { text: /Hoş\s*Geldiniz/i },
       { text: /Mükellef\s*Bilgileri|Vergi\s*Kimlik\s*No/i },
       { css: "[data-testid='user-menu']" },
       { css: "button:has-text('KULLANICI DEĞİŞTİR')" },
@@ -512,16 +520,21 @@ async function resolve(page, key, options = {}) {
 
   const timeout = options.timeout ?? 4000;
   const tried = [];
+  const start = Date.now();
 
-  for (const candidate of spec.candidates) {
-    tried.push(describeCandidate(candidate));
-    try {
-      const locator = toLocator(page, candidate).first();
-      await locator.waitFor({ state: "visible", timeout });
-      return locator;
-    } catch (err) {
-      // Bu aday tutmadı; sıradakini dene.
+  while (true) {
+    for (const candidate of spec.candidates) {
+      tried.push(describeCandidate(candidate));
+      try {
+        const locator = toLocator(page, candidate).first();
+        if (await locator.isVisible()) {
+          return locator;
+        }
+      } catch (_) {}
     }
+
+    if (Date.now() - start >= timeout) break;
+    await new Promise((r) => setTimeout(r, Math.min(50, Math.max(10, timeout - (Date.now() - start)))));
   }
 
   if (spec.optional || options.optional) return null;
