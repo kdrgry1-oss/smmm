@@ -352,6 +352,36 @@ app.post("/advisor/clients", async (req, res) => {
 });
 
 /**
+ * GENEL OTURUM DURUMU (mükellef veya müşavir): tarayıcı AÇILMAZ; yalnız diskteki dosya okunur.
+ * body: { username? } veya { sessionKey? }
+ */
+app.post("/session-status", (req, res) => {
+  const body = req.body || {};
+  const key = typeof body.sessionKey === "string" && body.sessionKey.trim()
+    ? body.sessionKey.trim()
+    : typeof body.username === "string" ? body.username.trim() : "";
+  if (!key || key.length > 200) {
+    return res.status(400).json({ ok: false, message: "username veya sessionKey zorunludur." });
+  }
+
+  const raw = session.readRawByKey(session.sessionKey(key));
+  if (!raw) {
+    return res.json({ ok: true, exists: false, expired: false, lastSeenAt: null });
+  }
+
+  const expired = Boolean(raw.parsed.expiredAt);
+  const tooOld = !expired && Date.now() - raw.mtimeMs > session.SESSION_TTL_HOURS * 3600 * 1000;
+  return res.json({
+    ok: true,
+    exists: true,
+    expired: expired || tooOld,
+    lastSeenAt: expired
+      ? raw.parsed.lastSeenAt || null
+      : new Date(raw.mtimeMs).toISOString(),
+  });
+});
+
+/**
  * OTURUM DURUMU (rozet için): tarayıcı AÇILMAZ; yalnız diskteki oturum dosyası okunur.
  *   exists=false            → hiç giriş yapılmamış.
  *   expired=true            → keepalive/çekim oturumun düştüğünü işaretlemiş (yenilenmeli).

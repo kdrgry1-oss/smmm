@@ -313,6 +313,11 @@ public class GibRobotClient
         string sessionKey, CancellationToken ct) =>
         PostEnvelopeAsync<RobotSessionStatus>("/advisor/session-status", new { sessionKey }, ct);
 
+    /// <summary>Genel oturum durumu (mükellef veya müşavir — tarayıcı açılmaz, diskten okunur).</summary>
+    public Task<RobotSessionStatus> GetSessionStatusAsync(
+        string usernameOrKey, CancellationToken ct) =>
+        PostEnvelopeAsync<RobotSessionStatus>("/session-status", new { username = usernameOrKey, sessionKey = usernameOrKey }, ct);
+
     /// <summary>
     /// Ortak POST: token başlığı, zaman aşımı, Türkçe hata eşlemesi.
     /// Robot iş hatalarını 200 + {ok:false} ile döndürür; HTTP hataları burada eşlenir.

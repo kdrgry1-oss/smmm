@@ -214,11 +214,13 @@ const SELECTORS = {
     description: "Giriş ekranı — hata mesajı kutusu",
     candidates: [
       { text: /Kullanıcı\s*kodu\s*veya\s*şifre/i },
-      { text: /hatalı|geçersiz|yanlış/i },
+      { text: /Güvenlik\s*kodunu\s*yanlış/i },
+      { text: /hatalı\s*giriş/i },
+      { text: /kilitli\s*durumdadır/i },
       { text: /zaman\s*aşımına\s*uğramıştır/i },
       { text: /tekrar\s*giriş\s*yapınız/i },
       { text: /oturumunuz\s*sonlanmıştır/i },
-      { css: ".error, .alert-danger, [role='alert']" },
+      { css: "form .alert, form .error-message, .login-error" },
     ],
   },
 

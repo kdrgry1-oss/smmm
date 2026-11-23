@@ -724,12 +724,12 @@ async function isLoggedIn(page) {
   const hasPassword = await S.isPresent(page, "loginPassword", 600);
   if (hasPassword) return false;
 
-  // 2. Sayfada oturum zaman aşımı veya giriş hatası uyarısı varsa giriş yapılmamıştır.
+  // 2. Gösterge varsa (Çıkış, Kullanıcı Değiştir, Hoş Geldiniz, e-Tebligat vb.) kesinlikle giriş yapılmıştır
+  if (await S.isPresent(page, "loggedInMarker", 1000)) return true;
+
+  // 3. Sayfada oturum zaman aşımı veya giriş hatası uyarısı varsa giriş yapılmamıştır.
   const hasError = await S.isPresent(page, "loginError", 500);
   if (hasError) return false;
-
-  // 3. Gösterge varsa (Çıkış, Kullanıcı Değiştir, Hoş Geldiniz, e-Tebligat vb.) kesinlikle giriş yapılmıştır
-  if (await S.isPresent(page, "loggedInMarker", 1000)) return true;
 
   // 4. sessionStorage'da token var mı VE login URL'sinde değil miyiz?
   let hasToken = false;
@@ -1568,6 +1568,14 @@ async function autoLogin({ username, password, sessionKey }) {
   }
 
   const storageKey = sessionKey || username;
+
+  // 0. Ön kontrol: Disk üzerinde geçerli oturum zaten varsa tarayıcı açmadan dön (kredi/CPU tasarrufu)
+  const existing = session.loadStateByKey(session.sessionKey(storageKey));
+  if (existing && !existing.expiredAt) {
+    console.log(`[auto-login] Oturum zaten geçerli ve aktif — anahtar:${storageKey}`);
+    return { ok: true, message: "Oturum zaten aktif (kayıtlı oturum kullanıldı).", alreadyLoggedIn: true };
+  }
+
   console.log(`[auto-login] Otomatik giriş başlatılıyor — anahtar:${storageKey}`);
 
   const { browser, context } = await openContext(null, { allowImages: true });
@@ -1580,7 +1588,8 @@ async function autoLogin({ username, password, sessionKey }) {
     await userField.fill(String(username));
     await passField.fill(String(password));
 
-    const MAX_OCR_ATTEMPTS = 4;
+    // Kredi tasarrufu: En fazla 2 captcha denemesi yapılır (önceki 4 aşırı API tüketiyordu)
+    const MAX_OCR_ATTEMPTS = 2;
     for (let attempt = 1; attempt <= MAX_OCR_ATTEMPTS; attempt++) {
       console.log(`[auto-login] Captcha denemesi ${attempt}/${MAX_OCR_ATTEMPTS}`);
 
@@ -1595,6 +1604,10 @@ async function autoLogin({ username, password, sessionKey }) {
       );
 
       if (!solution || !solution.code || solution.code.length < 4) {
+        if (captchaSolver.isCircuitOpen()) {
+          console.warn("[auto-login] Devre kesici aktif, ek captcha denemesi yapılmadan durduruluyor.");
+          break;
+        }
         console.warn("[auto-login] Captcha okunamadı, görsel yenileniyor...");
         await refreshCaptcha(page);
         await polite();
@@ -1675,11 +1688,15 @@ async function autoLogin({ username, password, sessionKey }) {
     }
 
     await closeQuietly(browser);
+    const isCircuit = captchaSolver.isCircuitOpen();
     return {
       ok: false,
       requiresManual: true,
       needsCaptchaLogin: true,
-      message: `Otomatik OCR girişi ${MAX_OCR_ATTEMPTS} denemede doğrulanamadı. Lütfen manuel giriş yapın.`,
+      spendCapReached: isCircuit,
+      message: isCircuit
+        ? "Gemini API harcama veya kota limiti nedeniyle otomatik giriş durduruldu. Lütfen manuel giriş yapın."
+        : `Otomatik OCR girişi ${MAX_OCR_ATTEMPTS} denemede doğrulanamadı. Lütfen manuel giriş yapın.`,
     };
   } catch (err) {
     await closeQuietly(browser);

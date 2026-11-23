@@ -108,22 +108,26 @@ function readForHeartbeat(clientKey) {
   }
 }
 
-/** Canlı oturumları yokla; düşen veya önceden düşmüş oturumlar için yenileme bildir. */
+/** Yalnızca canlı oturumları yokla; yeni düşen oturumlar için tek seferlik yenileme bildir. */
 async function runSweep() {
-  const sessions = session.listSessions();
-  if (sessions.length === 0) return;
+  const allSessions = session.listSessions();
+  const activeSessions = allSessions.filter((s) => !s.expired);
+  if (activeSessions.length === 0) {
+    return;
+  }
 
-  console.log(`[keepalive] tur başladı — oturum:${sessions.length}`);
+  console.log(`[keepalive] tur başladı — aktif oturum:${activeSessions.length} (toplam:${allSessions.length})`);
   const counts = { alive: 0, expired: 0, skipped: 0, uncertain: 0, error: 0 };
-  const queue = sessions.map((s) => s.clientKey);
+  const queue = activeSessions.map((s) => s.clientKey);
 
   async function worker() {
     while (queue.length > 0 && !stopped) {
       const clientKey = queue.shift();
       try {
-        const status = sessions.find(s => s.clientKey === clientKey)?.expired ? "expired" : await heartbeatOne(clientKey);
+        const status = await heartbeatOne(clientKey);
         counts[status] = (counts[status] || 0) + 1;
         if (status === "expired") {
+          // Yalnızca canlı oturumun heartbeat sırasında düştüğü YENİ tespit edildiğinde olay gönder
           await require("./session-renewal-event").notifyExpired(clientKey);
           console.warn(
             `[keepalive] oturum DÜŞTÜ, expired işaretlendi — mükellef:${shortKey(clientKey)} ` +
@@ -145,7 +149,7 @@ async function runSweep() {
   }
 
   const workers = [];
-  for (let i = 0; i < Math.min(MAX_CONCURRENT, sessions.length); i++) {
+  for (let i = 0; i < Math.min(MAX_CONCURRENT, activeSessions.length); i++) {
     workers.push(worker());
   }
   await Promise.all(workers);

@@ -5,31 +5,67 @@
  *
  * Strateji:
  * 1. Playwright sayfasında HTML5 Canvas kullanarak görsel ön işleme:
+ *    - Büyütme (Scale 2.5x)
  *    - Gri tonlama (Grayscale)
  *    - Eşikleme / İkilileştirme (Otsu/Threshold binarization): arka plan gürültü çizgilerini siler.
- * 2. Yerel OCR: tesseract.js motoru (yalnızca 0-9 ve A-Z karakter kısıtlamasıyla).
- * 3. Yedek Motor (Opsiyonel / Fallback): Eğer yerel OCR güven skoru düşükse veya kod
- *    beklenen uzunlukta (5-6 karakter) değilse; GEMINI_API_KEY tanımlıysa Gemini Flash ile %99.9 doğruluk.
+ * 2. Devre Kesici (Circuit Breaker):
+ *    - Gemini API 429, harcama limiti (spend cap reached) veya kota hatası döndürdüğünde
+ *      derhal devreye girer (15-60 dk). Bu sürede ASLA API çağrısı yapılmaz, kredi harcanmaz.
+ * 3. Gemini Vision (Tek Model, Kredi Korumalı):
+ *    - Yalnızca devre kesici kapalıysa ve GEMINI_API_KEY tanımlıysa tek modelle (gemini-3.8-flash) çağrılır.
+ * 4. Yerel OCR (Tesseract.js):
+ *    - GİB kodları her zaman 5 haneli küçük harf ve rakamlardan (0-9, a-z) oluşur.
  */
 
 const { createWorker } = require("tesseract.js");
 
 let _tesseractWorker = null;
 
+// Devre Kesici (Circuit Breaker) durumu
+let _circuitBreakerUntil = 0;
+let _circuitBreakerReason = null;
+
+function isCircuitOpen() {
+  return Date.now() < _circuitBreakerUntil;
+}
+
+function tripCircuit(reason, cooldownMinutes = 15) {
+  _circuitBreakerUntil = Date.now() + cooldownMinutes * 60 * 1000;
+  _circuitBreakerReason = reason;
+  console.warn(
+    `[solveWithGemini] DEVRE KESİCİ (Circuit Breaker) AKTİF: ${reason}. ` +
+    `${cooldownMinutes} dakika boyunca Gemini API çağrısı yapılmayacak.`
+  );
+}
+
+function resetCircuit() {
+  _circuitBreakerUntil = 0;
+  _circuitBreakerReason = null;
+}
+
+function getCircuitStatus() {
+  return {
+    isOpen: isCircuitOpen(),
+    reason: _circuitBreakerReason,
+    remainingSeconds: isCircuitOpen() ? Math.round((_circuitBreakerUntil - Date.now()) / 1000) : 0,
+  };
+}
+
 /** Tesseract worker'ını tekil (singleton) olarak başlatır. */
 async function getWorker() {
   if (!_tesseractWorker) {
     _tesseractWorker = await createWorker("eng");
     await _tesseractWorker.setParameters({
-      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      tessedit_pageseg_mode: "7", // PSM 7: Single line of text
+      // GİB doğrulama kodları yalnızca küçük harf ve rakamdır (büyük harf yok)
+      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyz",
+      tessedit_pageseg_mode: "8", // PSM 8: Single word
     });
   }
   return _tesseractWorker;
 }
 
 /**
- * Playwright sayfası içindeki captcha görselini DOM seviyesinde Canvas ile temizler.
+ * Playwright sayfası içindeki captcha görselini DOM seviyesinde Canvas ile temizler ve 2.5 kat büyütür.
  * GİB'in arka plan gürültü çizgilerini silip harfleri net siyah yapar.
  *
  * @param {import('playwright').Page} page
@@ -42,16 +78,19 @@ async function preprocessCaptchaInPage(page, selector = "img[alt*='captcha' i], 
       const el = document.querySelector(sel) || document.querySelector("form img");
       if (!el) return null;
 
+      const scale = 2.5;
+      const naturalWidth = el.naturalWidth || el.width || 150;
+      const naturalHeight = el.naturalHeight || el.height || 50;
+
       const canvas = document.createElement("canvas");
-      const width = el.naturalWidth || el.width || 150;
-      const height = el.naturalHeight || el.height || 50;
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = Math.round(naturalWidth * scale);
+      canvas.height = Math.round(naturalHeight * scale);
 
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(el, 0, 0, width, height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(el, 0, 0, canvas.width, canvas.height);
 
-      const imgData = ctx.getImageData(0, 0, width, height);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imgData.data;
 
       // 1. Gri tonlama ve ortalama parlaklık hesabı
@@ -62,7 +101,7 @@ async function preprocessCaptchaInPage(page, selector = "img[alt*='captcha' i], 
       }
       const avg = total / (data.length / 4);
       // Dinamik eşik: ortalamanın biraz altındaki tonlar harftir (siyah), üstü arka plan (beyaz)
-      const threshold = Math.max(100, Math.min(160, avg * 0.9));
+      const threshold = Math.max(90, Math.min(160, avg * 0.88));
 
       for (let i = 0; i < data.length; i += 4) {
         const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
@@ -87,77 +126,88 @@ async function preprocessCaptchaInPage(page, selector = "img[alt*='captcha' i], 
 
 /**
  * Gemini Flash API'si ile Captcha çözümü (Yüksek doğruluklu mekanizma).
- * Ortamda GEMINI_API_KEY varsa kullanılır (deploy/.env içinde tanımlanır).
+ * Devre kesici açıksa çağrılmaz. Tek model kullanılır.
  */
 async function solveWithGemini(imageBuffer) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
-  const models = [
-    process.env.GEMINI_MODEL,
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-  ].filter(Boolean);
+  if (isCircuitOpen()) {
+    console.warn(
+      `[solveWithGemini] Devre kesici aktif (${_circuitBreakerReason}), Gemini çağrısı engellendi. ` +
+      `Kalan süre: ${Math.round((_circuitBreakerUntil - Date.now()) / 1000)}s`
+    );
+    return null;
+  }
 
+  // Yalnızca TEK bir model kullan (yedek model döngüsü kotayı katlayarak tüketir).
+  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
   const base64 = imageBuffer.toString("base64");
 
-  for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: "Extract all alphanumeric characters (letters and numbers) displayed in this image. This is for optical character recognition (OCR) transcription. Return ONLY the exact characters in order with no spaces, no punctuation, and no explanation.",
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: "Extract all alphanumeric characters (letters and numbers) displayed in this image. This is for optical character recognition (OCR) transcription. Return ONLY the exact characters in order with no spaces, no punctuation, and no explanation.",
+              },
+              {
+                inline_data: {
+                  mime_type: "image/png",
+                  data: base64,
                 },
-                {
-                  inline_data: {
-                    mime_type: "image/png",
-                    data: base64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.0,
-            maxOutputTokens: 1024,
-            thinkingConfig: {
-              thinkingBudget: 0,
-            },
+              },
+            ],
           },
-        }),
-      });
-      clearTimeout(timeout);
+        ],
+        generationConfig: {
+          temperature: 0.0,
+          maxOutputTokens: 1024,
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      }),
+    });
+    clearTimeout(timeout);
 
-      if (res.ok) {
-        const data = await res.json();
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        let text = "";
-        for (const p of parts) {
-          if (p.text) text = p.text.trim();
-        }
-        const cleaned = text.replace(/[^A-Za-z0-9]/g, "").trim();
-        if (cleaned.length >= 4 && cleaned.length <= 7) {
-          return { code: cleaned, method: `gemini (${model})` };
-        }
-      } else {
-        const errBody = await res.text().catch(() => "");
-        console.warn(`[solveWithGemini] Model ${model} HTTP ${res.status}: ${errBody.slice(0, 120)}`);
+    if (res.ok) {
+      const data = await res.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      let text = "";
+      for (const p of parts) {
+        if (p.text) text = p.text.trim();
       }
-    } catch (err) {
-      console.warn(`[solveWithGemini] Model ${model} hata:`, err && err.message);
+      const cleaned = text.replace(/[^A-Za-z0-9]/g, "").trim().toLowerCase();
+      if (cleaned.length >= 4 && cleaned.length <= 7) {
+        return { code: cleaned, method: `gemini (${model})` };
+      }
+    } else {
+      const errBody = await res.text().catch(() => "");
+      console.warn(`[solveWithGemini] Model ${model} HTTP ${res.status}: ${errBody.slice(0, 150)}`);
+
+      // 429 veya Harcama Sınırı (Spend Cap Reached) tespiti:
+      const isSpendCap = /spending\s*cap|spend\s*limit/i.test(errBody);
+      const isQuotaExhausted = res.status === 429 || isSpendCap || /resource_exhausted|quota/i.test(errBody);
+
+      if (isSpendCap) {
+        tripCircuit("Aylık harcama limiti (spending cap) aşıldı", 60);
+      } else if (isQuotaExhausted) {
+        tripCircuit("Hız sınırı veya kota aşıldı (HTTP 429)", 15);
+      }
     }
+  } catch (err) {
+    console.warn(`[solveWithGemini] Model ${model} hata:`, err && err.message);
   }
   return null;
 }
@@ -172,7 +222,7 @@ async function solveWithTesseract(imageBuffer) {
     const {
       data: { text, confidence },
     } = await worker.recognize(imageBuffer);
-    const cleaned = (text || "").replace(/[^A-Za-z0-9]/g, "").trim();
+    const cleaned = (text || "").replace(/[^A-Za-z0-9]/g, "").trim().toLowerCase();
     return { code: cleaned, confidence, method: "tesseract" };
   } catch (err) {
     console.warn("[solveWithTesseract] Hata:", err && err.message);
@@ -190,8 +240,8 @@ async function solveWithTesseract(imageBuffer) {
 async function solveCaptcha(rawBuffer, page = null) {
   if (!rawBuffer && !page) return null;
 
-  // 1. ÖNCELİK: Gemini Vision (Varsa 200ms'de %100 doğrulukla çözer)
-  if (process.env.GEMINI_API_KEY && rawBuffer) {
+  // 1. ÖNCELİK: Gemini Vision (Yalnızca devre kesici KAPALIYSA çağrılır — kredi korumalı)
+  if (process.env.GEMINI_API_KEY && rawBuffer && !isCircuitOpen()) {
     console.log("[solveCaptcha] Gemini AI ile çözülüyor...");
     const aiResult = await solveWithGemini(rawBuffer);
     if (aiResult && aiResult.code && aiResult.code.length >= 4) {
@@ -200,7 +250,20 @@ async function solveCaptcha(rawBuffer, page = null) {
     }
   }
 
-  // 2. İKİNCİL: Yerel Tesseract OCR (Ham görsel üzerinden)
+  // 2. İKİNCİL: Canvas ile temizlenip büyütülmüş görsel üzerinden Tesseract
+  if (page) {
+    console.log("[solveCaptcha] Canvas ön işleme (2.5x ölçek) ile temizlenip deneniyor...");
+    const cleaned = await preprocessCaptchaInPage(page);
+    if (cleaned) {
+      const cleanResult = await solveWithTesseract(cleaned);
+      if (cleanResult && cleanResult.code && cleanResult.code.length === 5) {
+        console.log(`[solveCaptcha] Tesseract (temizlenmiş) sonucu: ${cleanResult.code}`);
+        return cleanResult;
+      }
+    }
+  }
+
+  // 3. ÜÇÜNCÜL: Yerel Tesseract OCR (Ham görsel üzerinden)
   if (rawBuffer) {
     console.log("[solveCaptcha] Yerel Tesseract (ham) deneniyor...");
     const rawResult = await solveWithTesseract(rawBuffer);
@@ -210,23 +273,10 @@ async function solveCaptcha(rawBuffer, page = null) {
     }
   }
 
-  // 3. ÜÇÜNCÜL: Canvas ile arka plan gürültüsü temizlenmiş görsel üzerinden Tesseract
-  if (page) {
-    console.log("[solveCaptcha] Canvas ön işleme ile temizlenip deneniyor...");
-    const cleaned = await preprocessCaptchaInPage(page);
-    if (cleaned) {
-      const cleanResult = await solveWithTesseract(cleaned);
-      if (cleanResult && cleanResult.code && cleanResult.code.length >= 4) {
-        console.log(`[solveCaptcha] Tesseract (temizlenmiş) sonucu: ${cleanResult.code}`);
-        return cleanResult;
-      }
-    }
-  }
-
-  // 4. Son fallback: Varsa rawResult kodunu kabul et
+  // 4. Son fallback: Varsa 4-6 karakter arası kodu kabul et
   if (rawBuffer) {
     const rawResult = await solveWithTesseract(rawBuffer);
-    if (rawResult && rawResult.code && rawResult.code.length >= 4) {
+    if (rawResult && rawResult.code && rawResult.code.length >= 4 && rawResult.code.length <= 6) {
       return rawResult;
     }
   }
@@ -239,4 +289,9 @@ module.exports = {
   preprocessCaptchaInPage,
   solveWithTesseract,
   solveWithGemini,
+  isCircuitOpen,
+  tripCircuit,
+  resetCircuit,
+  getCircuitStatus,
 };
+
