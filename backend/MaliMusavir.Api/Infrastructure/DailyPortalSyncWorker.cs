@@ -26,8 +26,8 @@ public class DailyPortalSyncWorker : BackgroundService
 {
     private static readonly TimeZoneInfo TurkeyTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Istanbul");
 
-    /// <summary>Her turda taranan geriye dönük aralık (geç düşen belgeler yakalanır).</summary>
-    public const int LookbackDays = 7;
+    /// <summary>Her turda taranan geriye dönük aralık (geç düşen belgeler ve tebligatlar yakalanır).</summary>
+    public const int LookbackDays = 60;
 
     /// <summary>Zamanı kaçırmamak için dakikada bir kontrol edilir.</summary>
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);

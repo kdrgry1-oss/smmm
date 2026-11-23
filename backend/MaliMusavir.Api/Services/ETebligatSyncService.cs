@@ -14,6 +14,8 @@ public class ETebligatSyncResult
     public int SkippedDuplicates { get; init; }
     /// <summary>Taranan mükellef sayısı.</summary>
     public int ClientCount { get; init; }
+    /// <summary>Hata alınan mükellef sayısı.</summary>
+    public int FailedCount { get; init; }
     /// <summary>Başarısızlıkta kullanıcıya gösterilecek Türkçe mesaj.</summary>
     public string? ErrorMessage { get; init; }
     public bool Retryable { get; init; }
@@ -76,6 +78,7 @@ public class ETebligatSyncService
 
         var added = 0;
         var skipped = 0;
+        var failed = 0;
 
         // Sağlayıcı seçimi için mükelleflerin entegrasyonları tek sorguda okunur.
         var clientIds = clients.Select(c => c.Id).ToList();
@@ -159,6 +162,7 @@ public class ETebligatSyncService
                         Retryable = result.Retryable
                     };
                 }
+                failed++;
                 continue;
             }
 
@@ -222,7 +226,8 @@ public class ETebligatSyncService
             Success = true,
             Added = added,
             SkippedDuplicates = skipped,
-            ClientCount = clients.Count
+            ClientCount = clients.Count,
+            FailedCount = failed
         };
     }
 

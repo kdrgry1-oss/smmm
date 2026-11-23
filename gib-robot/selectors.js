@@ -191,20 +191,25 @@ const SELECTORS = {
   loggedInMarker: {
     description: "Giriş sonrası ana ekran göstergesi",
     candidates: [
-      { role: "button", name: /Çıkış|Oturumu\s*Kapat/i },
-      { role: "link", name: /Çıkış|Oturumu\s*Kapat/i },
-      { text: /Çıkış\s*Yap/i },
+      { role: "button", name: /Çıkış|Oturumu\s*Kapat|Güvenli\s*Çıkış/i },
+      { role: "link", name: /Çıkış|Oturumu\s*Kapat|Güvenli\s*Çıkış/i },
+      { text: /Çıkış\s*Yap|Güvenli\s*Çıkış/i },
+      { text: /kullan[ıi]c[ıi]\s*de[gğ][iı][sş]t[iı]r/i },
       { text: /Mükellef\s*Bilgileri|Vergi\s*Kimlik\s*No/i },
       { css: "[data-testid='user-menu']" },
+      { css: "button:has-text('KULLANICI DEĞİŞTİR')" },
     ],
   },
 
-  /** Hatalı kimlik uyarısı (giriş ekranında kalındıysa neden budur). */
+  /** Hatalı kimlik veya oturum düşmesi uyarısı (giriş ekranında kalındıysa neden budur). */
   loginError: {
     description: "Giriş ekranı — hata mesajı kutusu",
     candidates: [
       { text: /Kullanıcı\s*kodu\s*veya\s*şifre/i },
       { text: /hatalı|geçersiz|yanlış/i },
+      { text: /zaman\s*aşımına\s*uğramıştır/i },
+      { text: /tekrar\s*giriş\s*yapınız/i },
+      { text: /oturumunuz\s*sonlanmıştır/i },
       { css: ".error, .alert-danger, [role='alert']" },
     ],
   },
@@ -368,6 +373,10 @@ const SELECTORS = {
   clientSwitcher: {
     description: "Müşavir paneli — mükellef seçme kutusu / düğmesi",
     candidates: [
+      { text: /kullan[ıi]c[ıi]\s*de[gğ][iı][sş]t[iı]r/i },
+      { role: "button", name: /kullan[ıi]c[ıi]\s*de[gğ][iı][sş]t[iı]r/i },
+      { css: "button:has-text('KULLANICI DEĞİŞTİR')" },
+      { css: "button:has-text('Kullanıcı Değiştir')" },
       { role: "button", name: /Mükellef|Müşteri|İşlem\s*Yapılacak/i },
       { role: "combobox", name: /Mükellef|Müşteri|İşlem\s*Yapılacak/i },
       { css: "select[name*='mukellef' i]" },
@@ -382,6 +391,8 @@ const SELECTORS = {
     description: "Müşavir paneli — mükellef arama kutusu (VKN/TCKN/unvan)",
     optional: true,
     candidates: [
+      { css: "input[name='altKullaniciAdi']" },
+      { placeholder: /kullan[ıi]c[ıi]\s*ad[ıi]n[ıi]\s*giriniz/i },
       { placeholder: /VKN|TCKN|Vergi\s*Kimlik|Mükellef\s*Ara|Unvan/i },
       { role: "searchbox" },
       { role: "textbox", name: /Mükellef|VKN|TCKN/i },
@@ -394,6 +405,8 @@ const SELECTORS = {
   clientResultRow: {
     description: "Müşavir paneli — mükellef arama sonucu satırı (VKN metniyle eşleşen)",
     candidates: [
+      { css: ".MuiDataGrid-row" },
+      { css: ".MuiDialog-root [role='row']" },
       { css: "table tbody tr" },
       { css: "[role='option']" },
       { css: "[role='row']" },
@@ -407,6 +420,10 @@ const SELECTORS = {
     description: "Müşavir paneli — mükellef seçim onayı",
     optional: true,
     candidates: [
+      { role: "button", name: /ge[cç][iı][sş]\s*yap/i },
+      { text: /ge[cç][iı][sş]\s*yap/i },
+      { css: "button:has-text('GEÇİŞ YAP')" },
+      { css: "button:has-text('Geçiş Yap')" },
       { role: "button", name: /^\s*(Seç|Onayla|Devam(\s*Et)?|Tamam)\s*$/i },
       { text: /^\s*Seç\s*$/i },
     ],

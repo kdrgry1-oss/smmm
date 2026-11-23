@@ -64,14 +64,18 @@ public class ETebligatController : ControllerBase
                 : BadRequest(new { message });
         }
 
+        var message = result.Added > 0
+            ? $"{result.Added} yeni tebligat alındı ({result.ClientCount} mükellef tarandı)."
+            : result.FailedCount > 0
+                ? $"{result.ClientCount} mükellef tarandı. Yeni tebligat yok ({result.FailedCount} mükellefte GİB oturumu veya bağlantı kontrol edilmeli)."
+                : $"Yeni tebligat yok ({result.ClientCount} mükellef tarandı).";
+
         return Ok(new ETebligatSyncResponse
         {
             Added = result.Added,
             SkippedDuplicates = result.SkippedDuplicates,
             ClientCount = result.ClientCount,
-            Message = result.Added > 0
-                ? $"{result.Added} yeni tebligat alındı ({result.ClientCount} mükellef tarandı)."
-                : $"Yeni tebligat yok ({result.ClientCount} mükellef tarandı)."
+            Message = message
         });
     }
 

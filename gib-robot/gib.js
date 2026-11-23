@@ -720,29 +720,36 @@ async function assertNoManualStep(page, label) {
 
 /** Oturum açık mı? (giriş göstergesi görünüyor veya sessionStorage'da token var) */
 async function isLoggedIn(page) {
-  // 1. Gösterge varsa (Çıkış vb.) kesinlikle giriş yapılmıştır
+  // 1. Sayfada şifre alanı veya captcha alanı görünüyorsa KESİNLİKLE giriş yapılmamıştır.
+  const hasLoginForm =
+    (await S.isPresent(page, "loginPassword", 800)) ||
+    (await S.isPresent(page, "captchaInput", 500));
+  if (hasLoginForm) return false;
+
+  // 2. Sayfada oturum zaman aşımı veya giriş hatası uyarısı varsa giriş yapılmamıştır.
+  const hasError = await S.isPresent(page, "loginError", 500);
+  if (hasError) return false;
+
+  // 3. Gösterge varsa (Çıkış, Kullanıcı Değiştir vb.) kesinlikle giriş yapılmıştır
   if (await S.isPresent(page, "loggedInMarker", 1000)) return true;
 
-  // 2. sessionStorage'da token var mı?
+  // 4. sessionStorage'da token var mı VE login URL'sinde değil miyiz?
   let hasToken = false;
   try {
     hasToken = await page.waitForFunction(() => {
       const token = window.sessionStorage.getItem("token");
       return typeof token === "string" && token.trim().length > 0;
-    }, null, { timeout: 3500 }).then(() => true).catch(() => false);
+    }, null, { timeout: 2000 }).then(() => true).catch(() => false);
   } catch {
     hasToken = false;
   }
 
-  if (hasToken) {
-    // Token varsa: sayfada aktif bir loginError kutusu yoksa oturum açılmıştır
-    const hasError = await S.isPresent(page, "loginError", 500);
-    if (!hasError) return true;
+  if (hasToken && !page.url().toLowerCase().includes("login")) {
+    return true;
   }
 
-  // 3. Gösterge yoksa: giriş formu yoksa ve URL login değilse
-  const loginForm = await S.isPresent(page, "loginPassword", 800);
-  return !loginForm && !page.url().toLowerCase().includes("login");
+  // 5. Giriş formu yoksa ve URL login değilse
+  return !page.url().toLowerCase().includes("login");
 }
 
 /**
@@ -885,6 +892,13 @@ async function selectClient(page, targetTaxId) {
     throw new Error(`Geçersiz mükellef VKN/TCKN: "${String(targetTaxId)}".`);
   }
 
+  // 1. Sayfada veya başlıkta hedef VKN zaten aktif kullanıcı olarak görünüyorsa geçiş adımı atlanır.
+  const currentBody = await page.evaluate(() => document.body.innerText).catch(() => "");
+  if (currentBody.includes(taxId)) {
+    console.log(`[selectClient] ${taxId} zaten aktif mükellef/kullanıcı olarak görünüyor, geçiş adımı atlandı.`);
+    return;
+  }
+
   const switcher = await S.resolve(page, "clientSwitcher", { timeout: 10000 });
 
   // Native <select> ise seçenek metninden/değerinden VKN aranır.
@@ -912,7 +926,7 @@ async function selectClient(page, targetTaxId) {
   }
 
   await switcher.click();
-  await sleep(600);
+  await sleep(800);
 
   // Arama kutusu varsa VKN yazılır (yoksa liste doğrudan görünüyordur — atlanır).
   const search = await S.resolve(page, "clientSearchInput", { optional: true, timeout: 2500 });
@@ -922,13 +936,22 @@ async function selectClient(page, targetTaxId) {
     await sleep(1200);
   }
 
-  // VKN metnini taşıyan ilk sonuç satırı.
+  // VKN metnini (veya maskeli halini) taşıyan ilk sonuç satırı.
   let row = null;
   const tried = [];
+  const taxPrefix = taxId.slice(0, 3);
   for (const candidate of S.SELECTORS.clientResultRow.candidates) {
     tried.push(S.describeCandidate(candidate));
     try {
-      const locator = S.toLocator(page, candidate).filter({ hasText: taxId }).first();
+      let locator = S.toLocator(page, candidate).filter({ hasText: taxId }).first();
+      if ((await locator.count()) === 0 && taxPrefix) {
+        // GİB VKN'yi '46********' şeklinde maskelemiş olabilir
+        locator = S.toLocator(page, candidate).filter({ hasText: taxPrefix }).first();
+      }
+      if ((await locator.count()) === 0 && search) {
+        // Arama yapıldıysa listedeki ilk satır
+        locator = S.toLocator(page, candidate).first();
+      }
       await locator.waitFor({ state: "visible", timeout: 2500 });
       row = locator;
       break;
@@ -937,13 +960,13 @@ async function selectClient(page, targetTaxId) {
     }
   }
   if (!row) {
-    // Son çare: VKN metninin kendisi tıklanabilir olabilir.
+    // Son çare: VKN metninin kendisi veya GEÇİŞ YAP butonu doğrudan görünür olabilir.
     try {
       const byText = page.getByText(taxId, { exact: false }).first();
       await byText.waitFor({ state: "visible", timeout: 2500 });
       row = byText;
     } catch (err) {
-      // bulunamadı — aşağıda teşhisle hata
+      // bulunamadı
     }
   }
   if (!row) {
@@ -956,8 +979,14 @@ async function selectClient(page, targetTaxId) {
     );
   }
 
-  await row.click();
-  await sleep(800);
+  // Satır içindeki "GEÇİŞ YAP" butonu varsa ona tıkla, yoksa satırın kendisine
+  const switchBtn = row.locator("button").filter({ hasText: /ge[cç][iı][sş]\s*yap/i }).first();
+  if ((await switchBtn.count().catch(() => 0)) > 0) {
+    await switchBtn.click();
+  } else {
+    await row.click();
+  }
+  await sleep(1000);
 
   // Seçim onayı (varsa).
   const confirm = await S.resolve(page, "clientSelectConfirm", { optional: true, timeout: 1500 });
