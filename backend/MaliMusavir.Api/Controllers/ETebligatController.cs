@@ -58,13 +58,13 @@ public class ETebligatController : ControllerBase
 
         if (!result.Success)
         {
-            var message = result.ErrorMessage ?? "Senkronizasyon başarısız oldu. Lütfen tekrar deneyin.";
+            var errMessage = result.ErrorMessage ?? "Senkronizasyon başarısız oldu. Lütfen tekrar deneyin.";
             return result.Retryable
-                ? StatusCode(StatusCodes.Status502BadGateway, new { message })
-                : BadRequest(new { message });
+                ? StatusCode(StatusCodes.Status502BadGateway, new { message = errMessage })
+                : BadRequest(new { message = errMessage });
         }
 
-        var message = result.Added > 0
+        var responseMessage = result.Added > 0
             ? $"{result.Added} yeni tebligat alındı ({result.ClientCount} mükellef tarandı)."
             : result.FailedCount > 0
                 ? $"{result.ClientCount} mükellef tarandı. Yeni tebligat yok ({result.FailedCount} mükellefte GİB oturumu veya bağlantı kontrol edilmeli)."
@@ -75,7 +75,7 @@ public class ETebligatController : ControllerBase
             Added = result.Added,
             SkippedDuplicates = result.SkippedDuplicates,
             ClientCount = result.ClientCount,
-            Message = message
+            Message = responseMessage
         });
     }
 
