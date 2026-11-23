@@ -1648,6 +1648,19 @@ async function autoLogin({ username, password, sessionKey }) {
       if (errorBox) {
         reason = (await errorBox.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
         console.warn(`[auto-login] Giriş başarısız, portal mesajı: ${reason}`);
+
+        // Şifre yanlışsa veya hesap kilitliyse tekrar tekrar captcha çözüp deneme yapılmaz
+        if (/bilgiler\s*hatalıdır|kilitli|bloke/i.test(reason)) {
+          console.warn(`[auto-login] Kimlik bilgileri hatalı veya hesap kilitli, denemeler durduruluyor.`);
+          await closeQuietly(browser);
+          return {
+            ok: false,
+            requiresManual: true,
+            needsCaptchaLogin: false,
+            invalidCredentials: true,
+            message: `GİB girişi başarısız: ${reason}`,
+          };
+        }
       }
 
       // Kullanıcı adı / şifre silindiyse tekrar doldur
