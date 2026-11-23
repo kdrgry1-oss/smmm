@@ -124,7 +124,6 @@ const SELECTORS = {
       { css: "input#userid" },
       { css: "input[name='userid']" },
       { css: "input[name='username']" },
-      { css: "form input[type='text']:not([type='hidden'])" },
     ],
   },
 
@@ -184,9 +183,6 @@ const SELECTORS = {
       { css: "input[name*='captcha' i]" },
       { css: "input[id*='captcha' i]" },
       { css: "input[name*='dogrulama' i]" },
-      // Son çare: son metin alanı (1. kullanıcı kodu, şifre type=password'dır).
-      { css: "form input[type='text']:last-of-type" },
-      { css: "input[type='text']:last-of-type" },
     ],
   },
 
@@ -203,9 +199,13 @@ const SELECTORS = {
       { text: /Çıkış\s*Yap|Güvenli\s*Çıkış/i },
       { text: /kullan[ıi]c[ıi]\s*de[gğ][iı][sş]t[iı]r/i },
       { text: /Hoş\s*Geldiniz/i },
+      { text: /Dijital\s*Vergi\s*Dairesi/i },
+      { text: /e-Tebligat/i },
       { text: /Mükellef\s*Bilgileri|Vergi\s*Kimlik\s*No/i },
       { css: "[data-testid='user-menu']" },
       { css: "button:has-text('KULLANICI DEĞİŞTİR')" },
+      { css: "app-header" },
+      { css: ".user-info, .user-name, [class*='user-menu']" },
     ],
   },
 
@@ -553,14 +553,16 @@ async function isPresent(page, key, timeout = 1200) {
   const spec = SELECTORS[key];
   if (!spec) throw new Error(`Tanımsız seçici anahtarı: ${key}`);
 
-  for (const candidate of spec.candidates) {
-    try {
-      const locator = toLocator(page, candidate).first();
-      await locator.waitFor({ state: "visible", timeout });
-      return true;
-    } catch (err) {
-      // sıradaki aday
+  const start = Date.now();
+  while (true) {
+    for (const candidate of spec.candidates) {
+      try {
+        const locator = toLocator(page, candidate).first();
+        if (await locator.isVisible()) return true;
+      } catch (_) {}
     }
+    if (Date.now() - start >= timeout) break;
+    await new Promise((r) => setTimeout(r, Math.min(50, Math.max(10, timeout - (Date.now() - start)))));
   }
   return false;
 }

@@ -46,3 +46,10 @@ test('current GIB dashboard greeting is recognized as a logged-in marker', async
   const page = { getByText: make, getByRole: () => make(''), locator: () => make('') };
   assert.ok(await S.resolve(page, 'loggedInMarker', { timeout: 0 }));
 });
+
+test('isPresent returns true when marker matches, and false when absent', async () => {
+  const page = pageWith(v => v === 'app-header');
+  assert.ok(await S.isPresent(page, 'loggedInMarker', 200));
+  assert.equal(await S.isPresent(page, 'loginPassword', 200), false);
+});
+

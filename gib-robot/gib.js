@@ -720,17 +720,15 @@ async function assertNoManualStep(page, label) {
 
 /** Oturum açık mı? (giriş göstergesi görünüyor veya sessionStorage'da token var) */
 async function isLoggedIn(page) {
-  // 1. Sayfada şifre alanı veya captcha alanı görünüyorsa KESİNLİKLE giriş yapılmamıştır.
-  const hasLoginForm =
-    (await S.isPresent(page, "loginPassword", 800)) ||
-    (await S.isPresent(page, "captchaInput", 500));
-  if (hasLoginForm) return false;
+  // 1. Sayfada şifre alanı görünüyorsa KESİNLİKLE giriş yapılmamıştır.
+  const hasPassword = await S.isPresent(page, "loginPassword", 600);
+  if (hasPassword) return false;
 
   // 2. Sayfada oturum zaman aşımı veya giriş hatası uyarısı varsa giriş yapılmamıştır.
   const hasError = await S.isPresent(page, "loginError", 500);
   if (hasError) return false;
 
-  // 3. Gösterge varsa (Çıkış, Kullanıcı Değiştir vb.) kesinlikle giriş yapılmıştır
+  // 3. Gösterge varsa (Çıkış, Kullanıcı Değiştir, Hoş Geldiniz, e-Tebligat vb.) kesinlikle giriş yapılmıştır
   if (await S.isPresent(page, "loggedInMarker", 1000)) return true;
 
   // 4. sessionStorage'da token var mı VE login URL'sinde değil miyiz?
@@ -761,7 +759,7 @@ async function isLoggedIn(page) {
  * @returns {Promise<{page: import('playwright').Page, reusedSession: boolean}>}
  */
 async function ensureSession(context, page, username) {
-  await page.goto(S.URLS.login, { waitUntil: "commit", timeout: SESSION_CHECK_TIMEOUT_MS });
+  await page.goto(S.URLS.login, { waitUntil: "domcontentloaded", timeout: SESSION_CHECK_TIMEOUT_MS });
   // Token ve giriş işareti çoğu kez ilk render'da gelir; sabit 1-2 sn bekleme yerine
   // kısa seçici denetimiyle devam edilir.
 
