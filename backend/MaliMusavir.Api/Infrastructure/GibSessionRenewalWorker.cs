@@ -34,14 +34,16 @@ public sealed class GibSessionRenewalWorker(IServiceScopeFactory scopes, ILogger
         _ => TimeSpan.FromMinutes(240)
     };
 
-    private static bool CheckRateLimitOrSpendCap(string? message, string? diagnostic)
+    public static bool CheckRateLimitOrSpendCap(string? message, string? diagnostic = null)
     {
         var text = (message + " " + diagnostic).ToLowerInvariant();
         return text.Contains("spending cap") ||
                text.Contains("resource_exhausted") ||
                text.Contains("429") ||
                text.Contains("istek limiti") ||
-               text.Contains("devre kesici");
+               text.Contains("devre kesici") ||
+               text.Contains("harcama") ||
+               text.Contains("kota");
     }
 
     public static bool Enqueue(string key)

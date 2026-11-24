@@ -126,7 +126,11 @@ public class GibPortalTebligatProvider : IETebligatProvider
 
         if (response.RequiresManual || response.NeedsCaptchaLogin)
         {
-            if (hasOwnCredentials)
+            if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.IsGlobalBackoffActive)
+            {
+                _logger.LogInformation("GİB küresel bekleme/harcama sınırı devrede; otomatik OCR girişi atlandı. ClientId: {ClientId}", client.Id);
+            }
+            else if (hasOwnCredentials)
             {
                 try
                 {
@@ -139,6 +143,10 @@ public class GibPortalTebligatProvider : IETebligatProvider
                         {
                             _logger.LogInformation("GİB otomatik OCR girişi başarılı! Mükellef tebligat çekimi tekrarlanıyor.");
                             response = await _robot.GetTebligatAsync(u, p, from, to, ct);
+                        }
+                        else if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.CheckRateLimitOrSpendCap(autoLoginRes.Message, autoLoginRes.Diagnostic))
+                        {
+                            MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.TripGlobalBackoff(TimeSpan.FromHours(1));
                         }
                     }
                 }
@@ -166,6 +174,10 @@ public class GibPortalTebligatProvider : IETebligatProvider
                         {
                             _logger.LogInformation("GİB otomatik OCR girişi başarılı! Tebligat çekimi tekrarlanıyor.");
                             response = await _robot.GetTebligatAsAdvisorAsync(sessionKey, client.TaxId, from, to, ct);
+                        }
+                        else if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.CheckRateLimitOrSpendCap(autoLoginRes.Message, autoLoginRes.Diagnostic))
+                        {
+                            MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.TripGlobalBackoff(TimeSpan.FromHours(1));
                         }
                     }
                     catch (Exception ex)

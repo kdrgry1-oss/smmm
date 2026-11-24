@@ -244,7 +244,11 @@ public class GibPortalProvider : IEInvoiceProvider
 
         if (response.RequiresManual || response.NeedsCaptchaLogin)
         {
-            if (TryParseAdvisorCredentials(apiKey, out var advisorTenantId2, out var targetTaxId2))
+            if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.IsGlobalBackoffActive)
+            {
+                _logger.LogInformation("GİB küresel bekleme/harcama sınırı devrede; otomatik fatura OCR girişi atlandı.");
+            }
+            else if (TryParseAdvisorCredentials(apiKey, out var advisorTenantId2, out var targetTaxId2))
             {
                 var advisorCred = await _db.TenantGibCredentials
                     .AsNoTracking()
@@ -263,6 +267,10 @@ public class GibPortalProvider : IEInvoiceProvider
                             _logger.LogInformation("GİB otomatik OCR girişi başarılı! Fatura çekimi tekrarlanıyor.");
                             response = await _robot.GetDocumentsAsAdvisorAsync(sessionKey, targetTaxId2, from.Date, to.Date, ct);
                         }
+                        else if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.CheckRateLimitOrSpendCap(autoLoginRes.Message, autoLoginRes.Diagnostic))
+                        {
+                            MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.TripGlobalBackoff(TimeSpan.FromHours(1));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -280,6 +288,10 @@ public class GibPortalProvider : IEInvoiceProvider
                     {
                         _logger.LogInformation("GİB otomatik OCR girişi başarılı! Mükellef fatura çekimi tekrarlanıyor.");
                         response = await _robot.GetDocumentsAsync(username2, password2, from.Date, to.Date, ct);
+                    }
+                    else if (MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.CheckRateLimitOrSpendCap(autoLoginRes.Message, autoLoginRes.Diagnostic))
+                    {
+                        MaliMusavir.Api.Infrastructure.GibSessionRenewalWorker.TripGlobalBackoff(TimeSpan.FromHours(1));
                     }
                 }
                 catch (Exception ex)

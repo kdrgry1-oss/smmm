@@ -2167,7 +2167,9 @@ async function runFlow(username, password, work, options = {}) {
   return session
     .withClientLock(identity, async () => {
       let cached = session.loadState(identity);
+      let autoLoginAttempted = false;
       if (!cached && username && password) {
+        autoLoginAttempted = true;
         console.log(`[runFlow] Kayıtlı oturum yok, otomatik OCR girişi deneniyor — ${identity}`);
         const autoRes = await flowBudget.bounded(() => autoLogin({ username, password, sessionKey }), REQUEST_TIMEOUT_MS).catch(() => null);
         if (autoRes && autoRes.ok) {
@@ -2209,7 +2211,7 @@ async function runFlow(username, password, work, options = {}) {
       } catch (err) {
         if (err && err.needsCaptchaLogin) {
           session.markExpired(identity);
-          if (username && password) {
+          if (username && password && !autoLoginAttempted) {
             console.log(`[runFlow] Oturum düşmüş, otomatik OCR ile yenilenip tekrar denenecek — ${identity}`);
             const autoRes = await flowBudget.bounded(() => autoLogin({ username, password, sessionKey }), REQUEST_TIMEOUT_MS).catch(() => null);
             if (autoRes && autoRes.ok) {
